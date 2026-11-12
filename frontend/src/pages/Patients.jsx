@@ -1,5 +1,5 @@
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 const testPatients = [
   {
     id: 1,
@@ -30,6 +30,48 @@ export default function Patients() {
   const [patients, setPatients] = useState(testPatients)
   const [editPatient, setEditPatient] = useState(null)
   const [detailPatient, setDetailPatient] = useState(null)
+
+  const [consultationRecords, setConsultationRecords] = useState([])
+  const [historyDate, setHistoryDate] = useState(
+    new Date().toLocaleDateString('en-CA')
+  )
+  const [selectedRecord, setSelectedRecord] = useState(null)
+  const [historyError, setHistoryError] = useState('')
+
+
+  const registerWaitingPatient = async () => {
+    if (!detailPatient) return
+
+    try {
+      const response = await fetch('http://127.0.0.1:8000/api/waiting', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          id: detailPatient.id,
+          name: detailPatient.name,
+          birthDate: detailPatient.birthDate,
+          phone: detailPatient.phone,
+          address: detailPatient.address,
+        }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        alert(data.detail || '상담 대기 등록에 실패했습니다.')
+        return
+      }
+
+      alert('상담 대기 등록이 완료되었습니다.')
+      setDetailPatient(null)
+    } catch (error) {
+      console.error('상담 대기 등록 오류:', error)
+      alert('서버 연결에 실패했습니다.')
+    }
+  }
+
   const [patientForm, setPatientForm] = useState({
   name: '',
   birthDate: '',
@@ -112,6 +154,36 @@ const validatePatient = () => {
 
   alert('필수 입력 확인이 완료되었습니다. 실제 저장 기능은 아직 연결되지 않았습니다.')
 }
+
+  useEffect(() => {
+    if (selectedMenu !== 'history') return
+
+    const loadConsultationRecords = async () => {
+      try {
+        setHistoryError('')
+
+        const response = await fetch(
+          'http://127.0.0.1:8000/api/consultations'
+        )
+
+        if (!response.ok) {
+          throw new Error('상담 기록 조회에 실패했습니다.')
+        }
+
+        const data = await response.json()
+        setConsultationRecords(data.records || [])
+      } catch (error) {
+        console.error('상담 기록 조회 오류:', error)
+        setHistoryError('상담 기록을 불러오지 못했습니다.')
+      }
+    }
+
+    loadConsultationRecords()
+  }, [selectedMenu])
+
+  const filteredConsultations = consultationRecords.filter(
+    (record) => record.createdAt?.slice(0, 10) === historyDate
+  )
 
   return (
     <div>
@@ -314,9 +386,115 @@ const validatePatient = () => {
             </div>
           )}
 
+
           {selectedMenu === 'history' && (
-            <h3>과거상담 기록확인</h3>
+            <div>
+              <h3>과거상담 기록확인</h3>
+
+              <label>
+                조회 날짜:{' '}
+                <input
+                  type="date"
+                  value={historyDate}
+                  onChange={(e) => setHistoryDate(e.target.value)}
+                />
+              </label>
+
+              {historyError && (
+                <p style={{ color: 'red' }}>{historyError}</p>
+              )}
+
+              <table style={{ width: '100%', marginTop: '20px' }}>
+                <thead>
+                  <tr>
+                    <th>상담 날짜</th>
+                    <th>환자명</th>
+                    <th>증상</th>
+                    <th>작업</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {filteredConsultations.map((record) => (
+                    <tr key={record.id}>
+                      <td>{record.createdAt?.slice(0, 10)}</td>
+                      <td>{record.patientName}</td>
+                      <td>{record.symptoms}</td>
+                      <td>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedRecord(record)}
+                        >
+                          상세보기
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {filteredConsultations.length === 0 && !historyError && (
+                <p>선택한 날짜의 상담 기록이 없습니다.</p>
+              )}
+
+              {selectedRecord && (
+                <div
+                  style={{
+                    position: 'fixed',
+                    inset: 0,
+                    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 1000,
+                  }}
+                >
+                  <div
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="상담일지 상세보기"
+                    style={{
+                      backgroundColor: 'white',
+                      padding: '24px',
+                      borderRadius: '10px',
+                      width: '500px',
+                      maxWidth: '90%',
+                      maxHeight: '85vh',
+                      overflowY: 'auto',
+                    }}
+                  >
+                    <h3>상담일지 상세보기</h3>
+
+                    <p>환자명: {selectedRecord.patientName}</p>
+                    <p>상담 날짜: {selectedRecord.createdAt?.slice(0, 10)}</p>
+                    <p>증상: {selectedRecord.symptoms}</p>
+
+                    <h4>선택한 병증</h4>
+                    {selectedRecord.selectedCandidates?.length > 0 ? (
+                      <ul>
+                        {selectedRecord.selectedCandidates.map((name) => (
+                          <li key={name}>{name}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p>선택한 병증이 없습니다.</p>
+                    )}
+
+                    <h4>추가 기록</h4>
+                    <p>{selectedRecord.additionalNotes || '-'}</p>
+
+                    <button
+                      type="button"
+                      onClick={() => setSelectedRecord(null)}
+                    >
+                      닫기
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           )}
+
 
           {detailPatient && (
             <div
@@ -354,9 +532,9 @@ const validatePatient = () => {
                 <p>보호자 연락처: {detailPatient.guardianPhone || '-'}</p>
 
                 <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
-                  <button type="button" disabled>
-                    상담대기등록
-                  </button>
+                <button type="button" onClick={registerWaitingPatient}>
+                  상담대기등록
+                </button>
                   <button type="button" onClick={() => setDetailPatient(null)}>
                     닫기
                   </button>

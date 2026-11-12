@@ -107,7 +107,8 @@ const analyzeSymptoms = async () => {
   }
 }
 
-const validateConsultation = () => {
+
+const validateConsultation = async () => {
   if (!patient?.id) {
     alert('환자 정보가 없습니다.')
     return
@@ -118,16 +119,40 @@ const validateConsultation = () => {
     return
   }
 
-  const consultationData = {
-    patientId: patient.id,
-    symptoms: symptoms.trim(),
-    selectedCandidates,
-    additionalNotes: additionalNotes.trim(),
+  try {
+    const response = await fetch(
+      'http://127.0.0.1:8000/api/consultations',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          patientId: patient.id,
+          symptoms: symptoms.trim(),
+          selectedCandidates,
+          additionalNotes: additionalNotes.trim(),
+        }),
+      }
+    )
+
+    const data = await response.json()
+
+    if (!response.ok) {
+      alert(
+        typeof data.detail === 'string'
+          ? data.detail
+          : '상담일지 저장에 실패했습니다.'
+      )
+      return
+    }
+
+    alert('상담일지가 저장되었습니다.')
+    navigate('/today')
+  } catch (error) {
+    console.error('상담일지 저장 오류:', error)
+    alert('서버 연결에 실패했습니다.')
   }
-
-  console.log('상담일지 저장 준비 데이터:', consultationData)
-
-  alert('입력값 확인이 완료되었습니다. 실제 저장 기능은 아직 연결되지 않았습니다.')
 }
 
   return (

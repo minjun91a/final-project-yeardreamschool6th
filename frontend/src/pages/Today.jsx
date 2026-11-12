@@ -1,5 +1,5 @@
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import './Today.css'
 
@@ -62,40 +62,141 @@ const initialPatients = [
 
 export default function Today() {
   const navigate = useNavigate()
-  const [patients, setPatients] = useState(initialPatients)
+  const [patients, setPatients] = useState([])
   const [role, setRole] = useState('한의사')
+
+  useEffect(() => {
+    const loadWaitingPatients = async () => {
+      try {
+        const response = await fetch('http://127.0.0.1:8000/api/waiting')
+
+        if (!response.ok) {
+          throw new Error('대기 목록 조회 실패')
+        }
+
+        const data = await response.json()
+
+        setPatients(
+          data.patients.map((patient) => ({
+            ...patient,
+            time: patient.time || '-',
+            status: patient.status || '대기',
+            doctor: patient.doctor || null,
+          }))
+        )
+      } catch (error) {
+        console.error('대기 목록 불러오기 오류:', error)
+      }
+    }
+
+    loadWaitingPatients()
+  }, [])
+
 
   const waiting = patients.filter((p) => p.status === '대기').length
   const consulting = patients.filter((p) => p.status === '진료 중').length
   const completed = patients.filter((p) => p.status === '완료').length
 
-  const startConsultation = (id) => {
+
+  const startConsultation = async (id) => {
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:8000/api/waiting/${id}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            status: '진료 중',
+            doctor: '담당 한의사',
+          }),
+        }
+      )
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        alert(data.detail || '상담 시작에 실패했습니다.')
+        return
+      }
+
     setPatients((prev) =>
       prev.map((p) =>
-        p.id === id
-          ? { ...p, status: '진료 중', doctor: '담당 한의사' }
-          : p
+        p.id === id ? data.patient : p
       )
     )
+  } catch (error) {
+    console.error('상담 시작 오류:', error)
+    alert('서버 연결에 실패했습니다.')
   }
+}
 
-  const cancelConsultation = (id) => {
+  const cancelConsultation = async (id) => {
     if (!window.confirm('상담을 취소하시겠습니까?')) return
 
-    setPatients((prev) =>
-      prev.map((p) =>
-        p.id === id
-          ? { ...p, status: '대기', doctor: null }
-          : p
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:8000/api/waiting/${id}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            status: '대기',
+            doctor: null,
+          }),
+        }
       )
-    )
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        alert(data.detail || '상담 취소에 실패했습니다.')
+        return
+      }
+
+      setPatients((prev) =>
+        prev.map((p) =>
+          p.id === id ? data.patient : p
+        )
+      )
+    } catch (error) {
+      console.error('상담 취소 오류:', error)
+      alert('서버 연결에 실패했습니다.')
+    }
   }
 
-  const cancelReception = (id) => {
+  const cancelReception = async (id) => {
     if (!window.confirm('접수를 취소하시겠습니까?')) return
 
-    setPatients((prev) => prev.filter((p) => p.id !== id))
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:8000/api/waiting/${id}`,
+        {
+          method: 'DELETE',
+        }
+      )
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        alert(data.detail || '접수 취소에 실패했습니다.')
+        return
+      }
+
+      setPatients((prev) =>
+        prev.filter((p) => p.id !== id)
+      )
+
+      alert('접수가 취소되었습니다.')
+    } catch (error) {
+      console.error('접수 취소 오류:', error)
+      alert('서버 연결에 실패했습니다.')
+    }
   }
+
 
   return (
     <div className="today-page">
