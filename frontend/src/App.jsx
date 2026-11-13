@@ -1,4 +1,4 @@
-
+import Staff from './pages/Staff'
 import { useEffect, useState } from 'react'
 import {
   BrowserRouter,
@@ -24,6 +24,13 @@ const menus = [
   { name: '소통·계정', path: '/account' },
 ]
 
+const roleMenus = {
+  director: ['/today', '/patients', '/consultation', '/prescriptions', '/account'],
+  doctor: ['/today', '/patients', '/consultation', '/prescriptions', '/account'],
+  desk: ['/today', '/patients', '/prescriptions', '/account'],
+}
+
+
 function App() {
   const [serverStatus, setServerStatus] = useState('확인 중')
 
@@ -45,6 +52,12 @@ function App() {
       })
   }, [])
 
+const currentRole = 'director'
+
+const visibleMenus = menus.filter((menu) =>
+  roleMenus[currentRole].includes(menu.path)
+)
+
   return (
     <BrowserRouter>
       <div className="app-layout">
@@ -55,7 +68,7 @@ function App() {
           </div>
 
           <nav className="sidebar-menu">
-            {menus.map((menu) => (
+            {visibleMenus.map((menu) => (
               <NavLink
                 key={menu.path}
                 to={menu.path}
@@ -84,8 +97,10 @@ function App() {
               <Route path="/patients" element={<Patients />} />
               <Route path="/consultation" element={<Consultation />} />
               <Route path="/prescriptions" element={<Prescriptions />} />
+              <Route path="/prescription/new" element={<Prescriptions />} />
               <Route path="/account" element={<Account />} />
               <Route path="*" element={<Navigate to="/today" replace />} />
+              <Route path="/staff" element={<Staff />} />
             </Routes>
           </main>
         </div>

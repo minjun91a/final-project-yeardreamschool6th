@@ -6,7 +6,22 @@ from sqlalchemy.orm import sessionmaker
 
 load_dotenv()
 
+
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL이 설정되지 않았습니다.")
+
+DATABASE_URL = DATABASE_URL.replace(
+    "postgresql+psycopg2://",
+    "postgresql+psycopg://",
+    1
+).replace(
+    "postgresql://",
+    "postgresql+psycopg://",
+    1
+)
+
 
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL이 설정되지 않았습니다.")

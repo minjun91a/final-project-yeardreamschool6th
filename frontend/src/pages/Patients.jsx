@@ -27,16 +27,38 @@ const testPatients = [
 export default function Patients() {
   const [selectedMenu, setSelectedMenu] = useState(null)
   const [searchKeyword, setSearchKeyword] = useState('')
-  const [patients, setPatients] = useState(testPatients)
+  const [patients, setPatients] = useState([])
   const [editPatient, setEditPatient] = useState(null)
   const [detailPatient, setDetailPatient] = useState(null)
 
+useEffect(() => {
+  const loadPatients = async () => {
+    try {
+      const response = await fetch('http://127.0.0.1:8000/api/patients')
+
+      if (!response.ok) {
+        throw new Error('환자 목록 조회 실패')
+      }
+
+      const data = await response.json()
+      setPatients(data.patients || [])
+    } catch (error) {
+      console.error('환자 목록 조회 오류:', error)
+    }
+  }
+
+  loadPatients()
+}, [])
+
+
   const [consultationRecords, setConsultationRecords] = useState([])
+  const [prescriptionRecords, setPrescriptionRecords] = useState([])
   const [historyDate, setHistoryDate] = useState(
     new Date().toLocaleDateString('en-CA')
   )
   const [selectedRecord, setSelectedRecord] = useState(null)
   const [historyError, setHistoryError] = useState('')
+  const [detailTab, setDetailTab] = useState('consultation')
 
 
   const registerWaitingPatient = async () => {
@@ -90,7 +112,8 @@ const handleEditChange = (e) => {
   }))
 }
 
-const saveEditedPatient = () => {
+
+const saveEditedPatient = async () => {
   if (!editPatient.name.trim()) {
     alert('성명을 입력해 주세요.')
     return
@@ -111,15 +134,47 @@ const saveEditedPatient = () => {
     return
   }
 
-  setPatients((prev) =>
-    prev.map((patient) =>
-      patient.id === editPatient.id ? { ...editPatient } : patient
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:8000/api/patients/${editPatient.id}`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: editPatient.name,
+          birthDate: editPatient.birthDate,
+          phone: editPatient.phone,
+          address: editPatient.address,
+          guardianName: editPatient.guardianName || '',
+          guardianRelation: editPatient.guardianRelation || '',
+          guardianPhone: editPatient.guardianPhone || '',
+        }),
+      }
     )
-  )
 
-  setEditPatient(null)
-  alert('환자 정보가 수정되었습니다. 현재는 테스트 데이터에만 반영됩니다.')
+    const data = await response.json()
+
+    if (!response.ok) {
+      alert(data.detail || '환자 정보 수정에 실패했습니다.')
+      return
+    }
+
+    setPatients((prev) =>
+      prev.map((patient) =>
+        patient.id === editPatient.id ? data.patient : patient
+      )
+    )
+
+    setEditPatient(null)
+    alert('환자 정보가 수정되었습니다.')
+  } catch (error) {
+    console.error('환자 정보 수정 오류:', error)
+    alert('서버 연결에 실패했습니다.')
+  }
 }
+
 const handleInputChange = (e) => {
   const { name, value } = e.target
 
@@ -129,7 +184,7 @@ const handleInputChange = (e) => {
   }))
 }
 
-const validatePatient = () => {
+const validatePatient = async (registerWaiting = false) => {
   if (!patientForm.name.trim()) {
     alert('성명을 입력해 주세요.')
     return
@@ -150,14 +205,90 @@ const validatePatient = () => {
     return
   }
 
-  console.log('신규 환자 등록 준비 데이터:', patientForm)
+  try {
+    const response = await fetch('http://127.0.0.1:8000/api/patients', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(patientForm),
+    })
 
-  alert('필수 입력 확인이 완료되었습니다. 실제 저장 기능은 아직 연결되지 않았습니다.')
+    const data = await response.json()
+
+    if (!response.ok) {
+      alert(data.detail || '환자 등록에 실패했습니다.')
+      return
+    }
+
+    setPatients((prev) => [...prev, data.patient])
+
+    if (registerWaiting) {
+      const waitingResponse = await fetch('http://127.0.0.1:8000/api/waiting', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          id: data.patient.id,
+          name: data.patient.name,
+          birthDate: data.patient.birthDate,
+          phone: data.patient.phone,
+          address: data.patient.address,
+        }),
+      })
+
+      if (!waitingResponse.ok) {
+        const waitingData = await waitingResponse.json()
+        alert(
+          `환자 정보는 저장됐지만 상담대기등록에 실패했습니다.\n${waitingData.detail || ''}`
+        )
+        setSelectedMenu('search')
+        return
+      }
+    }
+
+
+    setPatientForm({
+      name: '',
+      birthDate: '',
+      phone: '',
+      address: '',
+      guardianName: '',
+      guardianRelation: '',
+      guardianPhone: '',
+    })
+
+    alert(registerWaiting ? '환자 등록 및 상담대기등록이 완료되었습니다.' : '환자 등록이 완료되었습니다.')
+    setSelectedMenu('search')
+  } catch (error) {
+    console.error('환자 등록 오류:', error)
+    alert('서버 연결에 실패했습니다.')
+  }
 }
+
 
   useEffect(() => {
     if (selectedMenu !== 'history') return
+    const loadPrescriptionRecords = async () => {
+      try {
+        const response = await fetch(
+          'http://127.0.0.1:8000/api/prescriptions'
+        )
 
+        if (!response.ok) {
+          throw new Error('처방전 조회에 실패했습니다.')
+        }
+
+        const data = await response.json()
+        setPrescriptionRecords(data.records || [])
+      } catch (error) {
+        console.error('처방전 조회 오류:', error)
+        setHistoryError('처방전 기록을 불러오지 못했습니다.')
+      }
+    }
+
+    loadPrescriptionRecords()
     const loadConsultationRecords = async () => {
       try {
         setHistoryError('')
@@ -177,7 +308,7 @@ const validatePatient = () => {
         setHistoryError('상담 기록을 불러오지 못했습니다.')
       }
     }
-
+    loadPrescriptionRecords()
     loadConsultationRecords()
   }, [selectedMenu])
 
@@ -375,11 +506,11 @@ const validatePatient = () => {
             </div>
 
               <div style={{ marginTop: '20px', display: 'flex', gap: '10px' }}>
-                <button type="button" onClick={validatePatient}>
+                <button type="button" onClick={() => validatePatient(false)}>
                   저장
                 </button>
 
-                <button type="button" onClick={validatePatient}>
+                <button type="button" onClick={() => validatePatient(true)}>
                   저장 및 상담대기등록
                 </button>
               </div>
@@ -463,32 +594,129 @@ const validatePatient = () => {
                       overflowY: 'auto',
                     }}
                   >
-                    <h3>상담일지 상세보기</h3>
 
-                    <p>환자명: {selectedRecord.patientName}</p>
-                    <p>상담 날짜: {selectedRecord.createdAt?.slice(0, 10)}</p>
-                    <p>증상: {selectedRecord.symptoms}</p>
+                    <h3>상담 기록 상세보기</h3>
 
-                    <h4>선택한 병증</h4>
-                    {selectedRecord.selectedCandidates?.length > 0 ? (
-                      <ul>
-                        {selectedRecord.selectedCandidates.map((name) => (
-                          <li key={name}>{name}</li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p>선택한 병증이 없습니다.</p>
+                    <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
+                      <button
+                        type="button"
+                        onClick={() => setDetailTab('consultation')}
+                        style={{
+                          backgroundColor: detailTab === 'consultation' ? '#2563eb' : '#e5e7eb',
+                          color: detailTab === 'consultation' ? 'white' : 'black',
+                          padding: '10px 20px',
+                          border: 'none',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        상담일지
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setDetailTab('prescription')}
+                        style={{
+                          backgroundColor: detailTab === 'prescription' ? '#2563eb' : '#e5e7eb',
+                          color: detailTab === 'prescription' ? 'white' : 'black',
+                          padding: '10px 20px',
+                          border: 'none',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        처방전
+                      </button>
+                    </div>
+
+                    {detailTab === 'consultation' && (
+                      <div>
+                        <p>환자명: {selectedRecord.patientName}</p>
+                        <p>상담 날짜: {selectedRecord.createdAt?.slice(0, 10)}</p>
+                        <p>증상: {selectedRecord.symptoms}</p>
+
+                        <h4>선택한 병증</h4>
+                        {selectedRecord.selectedCandidates?.length > 0 ? (
+                          <ul>
+                            {selectedRecord.selectedCandidates.map((name) => (
+                              <li key={name}>{name}</li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p>선택한 병증이 없습니다.</p>
+                        )}
+
+                        <h4>추가 기록</h4>
+                        <p>{selectedRecord.additionalNotes || '-'}</p>
+                      </div>
                     )}
 
-                    <h4>추가 기록</h4>
-                    <p>{selectedRecord.additionalNotes || '-'}</p>
+
+                    {detailTab === 'prescription' && (
+                      <div>
+                        <h4>처방전 정보</h4>
+
+                        {prescriptionRecords
+                          .filter(
+                            (prescription) =>
+                              prescription.consultationId === selectedRecord.id
+                          )
+                          .map((prescription) => (
+                            <div
+                              key={prescription.id}
+                              style={{
+                                border: '1px solid #ddd',
+                                borderRadius: '8px',
+                                padding: '16px',
+                                marginBottom: '12px',
+                              }}
+                            >
+                              <p>처방명: {prescription.prescriptionName}</p>
+                              <p>작성 날짜: {prescription.createdAt?.slice(0, 10)}</p>
+                              <p>상태: {prescription.status}</p>
+
+                              <h4>약재 구성</h4>
+
+                              <table style={{ width: '100%' }}>
+                                <thead>
+                                  <tr>
+                                    <th>약재명</th>
+                                    <th>용량(g)</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {prescription.herbs.map((herb, index) => (
+                                    <tr key={index}>
+                                      <td>{herb.name}</td>
+                                      <td>{herb.amount}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          ))}
+
+                        {!prescriptionRecords.some(
+                          (prescription) =>
+                            prescription.consultationId === selectedRecord.id
+                        ) && (
+                          <p>아직 작성된 처방전이 없습니다.</p>
+                        )}
+                      </div>
+                    )}
+
 
                     <button
                       type="button"
-                      onClick={() => setSelectedRecord(null)}
+                      onClick={() => {
+                        setSelectedRecord(null)
+                        setDetailTab('consultation')
+                      }}
+                      style={{ marginTop: '20px' }}
                     >
                       닫기
                     </button>
+
                   </div>
                 </div>
               )}

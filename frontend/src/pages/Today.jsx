@@ -123,7 +123,7 @@ export default function Today() {
 
     setPatients((prev) =>
       prev.map((p) =>
-        p.id === id ? data.patient : p
+        p.id === id ? { ...p, ...data.patient } : p
       )
     )
   } catch (error) {
@@ -159,7 +159,7 @@ export default function Today() {
 
       setPatients((prev) =>
         prev.map((p) =>
-          p.id === id ? data.patient : p
+          p.id === id ? { ...p, ...data.patient } : p
         )
       )
     } catch (error) {

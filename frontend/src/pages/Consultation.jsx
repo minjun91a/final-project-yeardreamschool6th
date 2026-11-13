@@ -12,6 +12,8 @@ export default function Consultation() {
   const fromToday = location.state?.source === 'today'
   const [symptoms, setSymptoms] = useState('')
   const [additionalNotes, setAdditionalNotes] = useState('')
+  const [savedConsultation, setSavedConsultation] = useState(false)
+  const [savedConsultationId, setSavedConsultationId] = useState(null)
 
   const [analysisMessage, setAnalysisMessage] = useState('')
   const [isAnalyzing, setIsAnalyzing] = useState(false)
@@ -147,8 +149,9 @@ const validateConsultation = async () => {
       return
     }
 
+    setSavedConsultationId(data.record.id)
+    setSavedConsultation(true)
     alert('상담일지가 저장되었습니다.')
-    navigate('/today')
   } catch (error) {
     console.error('상담일지 저장 오류:', error)
     alert('서버 연결에 실패했습니다.')
@@ -346,11 +349,28 @@ const validateConsultation = async () => {
             <button
               type="button"
               onClick={validateConsultation}
+              disabled={savedConsultation}
             >
-              상담일지 저장
+              {savedConsultation ? '상담일지 저장 완료' : '상담일지 저장'}
             </button>
           </div>
-
+          {savedConsultation && (
+            <div style={{ marginTop: '12px', marginBottom: '12px' }}>
+              <button
+                type="button"
+                onClick={() =>
+                  navigate('/prescription/new', {
+                    state: {
+                      patient,
+                      consultationId: savedConsultationId,
+                    },
+                  })
+                }
+              >
+                AI 신규 처방전 작성 및 저장
+              </button>
+            </div>
+          )}
           <button onClick={() => navigate('/today')}>
             오늘의 업무로 돌아가기
           </button>
