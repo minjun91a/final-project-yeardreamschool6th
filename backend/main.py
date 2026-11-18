@@ -1,9 +1,12 @@
 import json
 import math
+from staff import create_staff_router
 from fastapi import Depends
 from fastapi import Request
 from itsdangerous import BadSignature, SignatureExpired
 import os
+from pathlib import Path
+from dotenv import load_dotenv
 from itsdangerous import URLSafeTimedSerializer
 from fastapi import Response
 from auth import verify_password
@@ -18,6 +21,8 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from database import engine
 
+
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 app = FastAPI(title="한의결 API")
 SESSION_SECRET = os.environ.get("SESSION_SECRET_KEY")
@@ -89,6 +94,10 @@ def require_authenticated_user(request: Request):
         )
 
     return account
+
+app.include_router(
+    create_staff_router(require_authenticated_user)
+)
 
 @app.exception_handler(SQLAlchemyError)
 async def database_exception_handler(request, exc):
@@ -243,69 +252,6 @@ def create_patient(
             **patient.model_dump()
         }
     }
-
-def require_authenticated_user(request: Request):
-    token = request.cookies.get("hanui_session")
-
-    if not token:
-        raise HTTPException(
-            status_code=401,
-            detail="로그인이 필요합니다."
-        )
-
-    try:
-        session_data = session_signer.loads(
-            token,
-            max_age=60 * 60 * 8
-        )
-    except (BadSignature, SignatureExpired):
-        raise HTTPException(
-            status_code=401,
-            detail="로그인 세션이 유효하지 않습니다."
-        )
-
-    account_id = session_data.get("accountId")
-
-    if not isinstance(account_id, int) or isinstance(account_id, bool):
-        raise HTTPException(
-            status_code=401,
-            detail="로그인 세션 정보가 올바르지 않습니다."
-        )
-
-    with engine.connect() as connection:
-        account = connection.execute(
-            text("""
-                SELECT
-                    "ACCOUNT_UNIQN",
-                    "CLINIC_UNIQN",
-                    "ROLE_CD",
-                    "IS_OWNER",
-                    "STATUS_CD"
-                FROM "ACCOUNT"
-                WHERE "ACCOUNT_UNIQN" = :account_id
-            """),
-            {"account_id": account_id}
-        ).mappings().first()
-
-    if account is None or account["STATUS_CD"] != "ACTIVE":
-        raise HTTPException(
-            status_code=401,
-            detail="사용할 수 없는 계정입니다."
-        )
-
-    if account["CLINIC_UNIQN"] is None:
-        raise HTTPException(
-            status_code=403,
-            detail="소속 한의원 정보가 없습니다."
-        )
-
-    if not account["IS_OWNER"] and account["ROLE_CD"] not in ("DOCTOR", "DESK"):
-        raise HTTPException(
-            status_code=403,
-            detail="접근 권한이 없습니다."
-        )
-
-    return account
 
 @app.get("/api/patients")
 def get_patients(
@@ -520,8 +466,6 @@ class WaitingPatient(BaseModel):
     phone: str
     address: str
 
-# 임시 대기 목록 (서버 재시작 시 초기화)
-waiting_patients = []
 
 from datetime import date
 
@@ -549,10 +493,7 @@ def get_visits(
                     v."WAITING_AT",
                     v."STARTED_AT",
                     v."COMPLETED_AT",
-                    p."NAME",
-                    (SELECT c."CASE_UNIQN" FROM "CASE_RECORD" c
-                     WHERE c."VISIT_UNIQN"=v."VISIT_UNIQN"
-                     ORDER BY c."CASE_UNIQN" DESC LIMIT 1) AS "CASE_UNIQN"
+                    p."NAME"
                 FROM "VISIT" v
                 JOIN "PATIENT" p
                     ON v."PATIENT_UNIQN" = p."PATIENT_UNIQN"
@@ -579,7 +520,6 @@ def get_visits(
     records = [
         {
             "visitId": row["VISIT_UNIQN"],
-            "caseId": row["CASE_UNIQN"],
             "patientId": row["PATIENT_UNIQN"],
             "patientName": row["NAME"],
             "doctorId": row["DOCTOR_UNIQN"],
@@ -662,67 +602,11 @@ def get_waiting_patients(
 
 
 def require_clinical_user(request: Request):
-    token = request.cookies.get("hanui_session")
-
-    if not token:
-        raise HTTPException(
-            status_code=401,
-            detail="로그인이 필요합니다."
-        )
-
-    try:
-        session_data = session_signer.loads(
-            token,
-            max_age=60 * 60 * 8
-        )
-    except (BadSignature, SignatureExpired):
-        raise HTTPException(
-            status_code=401,
-            detail="로그인 세션이 유효하지 않습니다."
-        )
-
-    account_id = session_data.get("accountId")
-
-    if not isinstance(account_id, int):
-        raise HTTPException(
-            status_code=401,
-            detail="로그인 세션 정보가 올바르지 않습니다."
-        )
-
-    with engine.connect() as connection:
-        account = connection.execute(
-            text("""
-                SELECT
-                    "ACCOUNT_UNIQN",
-                    "CLINIC_UNIQN",
-                    "ROLE_CD",
-                    "IS_OWNER",
-                    "STATUS_CD"
-                FROM "ACCOUNT"
-                WHERE "ACCOUNT_UNIQN" = :account_id
-            """),
-            {"account_id": account_id}
-        ).mappings().first()
-
-    if account is None or account["STATUS_CD"] != "ACTIVE":
-        raise HTTPException(
-            status_code=401,
-            detail="사용할 수 없는 계정입니다."
-        )
-
-    if not account["IS_OWNER"] and account["ROLE_CD"] != "DOCTOR":
-        raise HTTPException(
-            status_code=403,
-            detail="상담일지 조회 권한이 없습니다."
-        )
-
-    if account["CLINIC_UNIQN"] is None:
-        raise HTTPException(
-            status_code=403,
-            detail="소속 한의원 정보가 없습니다."
-        )
-
+    account = require_authenticated_user(request)
+    if account["ROLE_CD"] != "DOCTOR":
+        raise HTTPException(status_code=403, detail="진료·상담 권한이 없습니다.")
     return account
+
 
 
 @app.post("/api/waiting")
@@ -755,7 +639,7 @@ def register_waiting_patient(
                 SELECT "VISIT_UNIQN"
                 FROM "VISIT"
                 WHERE "PATIENT_UNIQN" = :patient_id
-                  AND "STATUS_CD" IN ('WAITING', 'IN_PROGRESS')
+                  AND "STATUS_CD" IN ('REGISTERED', 'WAITING', 'IN_PROGRESS')
                 LIMIT 1
             """),
             {"patient_id": patient.id}
@@ -795,7 +679,6 @@ def register_waiting_patient(
         "status": "대기"
     }
 
-    waiting_patients.append(new_patient)
 
     return {
         "message": "상담 대기 등록이 완료되었습니다.",
@@ -808,31 +691,10 @@ class WaitingStatusUpdate(BaseModel):
     status: str
     doctor: str | None = None
 
-from typing import Literal
-
-
-class ConsultationWrite(BaseModel):
-    operation: Literal["SAVE", "CORRECT"]
-    symptoms: str
-    consultationText: str
-    additionalNotes: str | None
-    diseaseSearchId: str | None
-    selectedDiseaseId: int | None
-    manualDiseaseText: str | None
-    reason: str | None
-
-
 class VisitStatusUpdate(BaseModel):
-    action: Literal[
-        "REGISTER_WAITING",
-        "START",
-        "CANCEL",
-        "PAUSE",
-        "RESUME",
-        "CORRECT_START"
-    ]
+    action: str
     reason: str | None = None
-    consultation: ConsultationWrite | None = None
+    consultation: dict | None = None
 
 
 @app.patch("/api/visits/{visit_id}/status")
@@ -881,36 +743,6 @@ def update_visit_status(
             status_code=400,
             detail="접수 취소 사유를 입력해야 합니다."
         )
-    if action == "PAUSE":
-        if not (request.reason or "").strip():
-            raise HTTPException(
-                status_code=400,
-                detail="상담 중단 사유를 입력해야 합니다."
-            )
-
-        if request.consultation is None:
-            raise HTTPException(
-                status_code=400,
-                detail="상담 중단 시 상담 내용이 필요합니다."
-            )
-
-        consultation = request.consultation
-
-        if (
-            consultation.selectedDiseaseId is not None
-            and consultation.manualDiseaseText is not None
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail="기업 병증 선택과 직접 입력을 동시에 사용할 수 없습니다."
-            )
-
-        if consultation.operation == "CORRECT":
-            if not (consultation.reason or "").strip():
-                raise HTTPException(
-                    status_code=400,
-                    detail="상담기록 정정 사유가 필요합니다."
-                )
 
     with engine.begin() as connection:
         visit = connection.execute(
@@ -1017,13 +849,13 @@ def update_visit_status(
                     }
                 )
 
-
         elif action == "CANCEL":
             if before_status not in ("REGISTERED", "WAITING"):
                 raise HTTPException(
                     status_code=409,
                     detail="접수를 취소할 수 없는 상태입니다."
                 )
+
             connection.execute(
                 text("""
                     UPDATE "VISIT"
@@ -1033,81 +865,14 @@ def update_visit_status(
                 {"visit_id": visit_id}
             )
         elif action == "PAUSE":
-                if before_status != "IN_PROGRESS":
-                    raise HTTPException(
-                        status_code=409,
-                        detail="진료 중인 상담만 중단할 수 있습니다."
-                    )
-
-                consultation = request.consultation
-
-                if consultation is None:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="상담 내용이 필요합니다."
-                    )
-                disease_search_id = consultation.diseaseSearchId
-                selected_disease_id = consultation.selectedDiseaseId
-                manual_disease_text = consultation.manualDiseaseText
-
-                has_search = disease_search_id is not None
-                has_selected = selected_disease_id is not None
-                has_manual = bool(
-                    manual_disease_text and manual_disease_text.strip()
-                )
-
-                if has_search != has_selected:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="병증 후보를 선택하려면 검색 ID와 병증 ID가 모두 필요합니다."
-                    )
-
-                if has_selected and has_manual:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="기업 병증 후보와 직접 입력 병증을 동시에 선택할 수 없습니다."
-                    )
-
-                if consultation.operation == "CORRECT":
-                    if not (consultation.reason or "").strip():
-                        raise HTTPException(
-                            status_code=400,
-                            detail="상담기록 정정 사유가 필요합니다."
-                        )
-
-                case = connection.execute(
-                    text("""
-                            SELECT
-                                "CASE_UNIQN",
-                                "AUTHOR_UNIQN",
-                                "SYMPTOM_TEXT",
-                                "CONSULTATION_TEXT",
-                                "SPECIAL_NOTE"
-                            FROM "CASE_RECORD"
-                            WHERE "VISIT_UNIQN" = :visit_id
-                            ORDER BY "CASE_UNIQN" DESC
-                            LIMIT 1
-                            FOR UPDATE
-                        """),
-                    {"visit_id": visit_id}
-                ).mappings().first()
-
-                if case is None:
-                    raise HTTPException(
-                        status_code=409,
-                        detail="연결된 상담기록이 없습니다."
-                    )
-
-                if case["AUTHOR_UNIQN"] != account_id:
-                    raise HTTPException(
-                        status_code=403,
-                        detail="담당 한의사의 상담기록이 아닙니다."
-                    )
-                full_case = connection.execute(text('SELECT * FROM "CASE_RECORD" WHERE "CASE_UNIQN"=:id FOR UPDATE'),
-                    {'id':case['CASE_UNIQN']}).mappings().one()
-                _write_case(connection, full_case, consultation, account_id)
-                connection.execute(text('''UPDATE "VISIT" SET "STATUS_CD"='INTERRUPTED' WHERE "VISIT_UNIQN"=:id'''),
-                    {'id':visit_id})
+            if before_status != "IN_PROGRESS":
+                raise HTTPException(status_code=409, detail="진료 중인 상담만 중단할 수 있습니다.")
+            if not (request.reason or "").strip():
+                raise HTTPException(status_code=400, detail="중단 사유가 필요합니다.")
+            connection.execute(
+                text("""UPDATE "VISIT" SET "STATUS_CD" = 'INTERRUPTED' WHERE "VISIT_UNIQN" = :visit_id"""),
+                {"visit_id": visit_id}
+            )
 
         elif action == "RESUME":
             if before_status != "INTERRUPTED":
@@ -1175,7 +940,7 @@ def update_visit_status(
                             "CASE_UNIQN",
                             "SYMPTOM_TEXT",
                             "CONSULTATION_TEXT",
-                            "SPECIAL_NOTE", "DISEASE_SEARCH_UNIQN", "SELECTED_DIS_UNIQN", "MANUAL_DISEASE_TEXT"
+                            "SPECIAL_NOTE"
                         FROM "CASE_RECORD"
                         WHERE "VISIT_UNIQN" = :visit_id
                     """),
@@ -1184,11 +949,11 @@ def update_visit_status(
 
             for case in cases:
                 if any(
-                        str(case[field] or "").strip()
+                        (case[field] or "").strip()
                         for field in (
                                 "SYMPTOM_TEXT",
                                 "CONSULTATION_TEXT",
-                                "SPECIAL_NOTE", "DISEASE_SEARCH_UNIQN", "SELECTED_DIS_UNIQN", "MANUAL_DISEASE_TEXT"
+                                "SPECIAL_NOTE"
                         )
                 ):
                     raise HTTPException(
@@ -1265,7 +1030,7 @@ def update_visit_status(
                             "CORRECT_START"
                         ) else None
                     )
-                }
+                    }
             )
 
         row = connection.execute(
@@ -1322,84 +1087,43 @@ def update_visit_status(
     }
 
 @app.patch("/api/waiting/{patient_id}")
-def update_waiting_status(
-    patient_id: int,
-    request: WaitingStatusUpdate,
-    account=Depends(require_clinical_user)
-):
-    if request.status == "진료 중":
-        before_status = "WAITING"
-        after_status = "IN_PROGRESS"
-        error_message = "대기 중인 환자만 상담을 시작할 수 있습니다."
-
-    elif request.status == "대기":
-        before_status = "IN_PROGRESS"
-        after_status = "WAITING"
-        error_message = "진료 중인 환자만 상담을 취소할 수 있습니다."
-
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail="올바르지 않은 상태입니다."
-        )
-
+def update_waiting_status(patient_id: int, request: WaitingStatusUpdate,
+                          account=Depends(require_clinical_user)):
+    if request.status not in ("진료 중", "대기"):
+        raise HTTPException(status_code=400, detail="올바르지 않은 상태입니다.")
+    starting = request.status == "진료 중"
+    before = "WAITING" if starting else "IN_PROGRESS"
+    after = "IN_PROGRESS" if starting else "WAITING"
     with engine.begin() as connection:
-        row = connection.execute(
-            text("""
-                UPDATE "VISIT"
-                SET
-                    "STATUS_CD" = CAST(:after_status AS VARCHAR),
-                    "STARTED_AT" = CASE
-                        WHEN CAST(:after_status AS VARCHAR) = 'IN_PROGRESS'
-                        THEN CURRENT_TIMESTAMP
-                        ELSE NULL
-                    END,
-                    "WAITING_AT" = CASE
-                        WHEN CAST(:after_status AS VARCHAR) = 'WAITING'
-                        THEN CURRENT_TIMESTAMP
-                        ELSE "WAITING_AT"
-                    END
-                WHERE "VISIT_UNIQN" = (
-                    SELECT "VISIT_UNIQN"
-                    FROM "VISIT"
-                    WHERE "PATIENT_UNIQN" = :patient_id
-                      AND "STATUS_CD" = :before_status
-                      AND "PATIENT_UNIQN" IN (
-                          SELECT "PATIENT_UNIQN"
-                          FROM "PATIENT"
-                          WHERE "CLINIC_UNIQN" = :clinic_id
-                      )
-                    ORDER BY "VISIT_UNIQN" DESC
-                    LIMIT 1
-                )
-                  AND "STATUS_CD" = :before_status
-                RETURNING "VISIT_UNIQN"
-            """),
-            {
-                "patient_id": patient_id,
-                "before_status": before_status,
-                "after_status": after_status,
-                "clinic_id": account["CLINIC_UNIQN"]
-            }
-        ).scalar_one_or_none()
-
-    if row is None:
-        raise HTTPException(
-            status_code=409,
-            detail=error_message
-        )
-
-    return {
-        "message": "환자 상태가 변경되었습니다.",
-        "patient": {
-            "id": patient_id,
-            "visitId": row,
-            "status": request.status,
-            "doctor": request.doctor if request.status == "진료 중" else None
-        }
-    }
-
-
+        visit = connection.execute(text('''
+            SELECT v."VISIT_UNIQN", v."DOCTOR_UNIQN" FROM "VISIT" v
+            JOIN "PATIENT" p ON p."PATIENT_UNIQN" = v."PATIENT_UNIQN"
+            WHERE v."PATIENT_UNIQN" = :patient_id
+              AND p."CLINIC_UNIQN" = :clinic_id AND v."STATUS_CD" = :before
+            ORDER BY v."VISIT_UNIQN" DESC LIMIT 1 FOR UPDATE OF v
+        '''), {"patient_id": patient_id, "clinic_id": account["CLINIC_UNIQN"],
+                "before": before}).mappings().first()
+        if visit is None:
+            raise HTTPException(status_code=409, detail="현재 상태에서는 변경할 수 없습니다.")
+        if not starting and visit["DOCTOR_UNIQN"] != account["ACCOUNT_UNIQN"]:
+            raise HTTPException(status_code=403, detail="담당 한의사만 상담을 취소할 수 있습니다.")
+        connection.execute(text('''
+            UPDATE "VISIT" SET "STATUS_CD" = :after,
+                "DOCTOR_UNIQN" = :doctor_id,
+                "STARTED_AT" = CASE WHEN :starting THEN CURRENT_TIMESTAMP ELSE NULL END,
+                "WAITING_AT" = CASE WHEN :starting THEN "WAITING_AT" ELSE CURRENT_TIMESTAMP END
+            WHERE "VISIT_UNIQN" = :visit_id
+        '''), {"after": after, "doctor_id": account["ACCOUNT_UNIQN"] if starting else None,
+                "starting": starting, "visit_id": visit["VISIT_UNIQN"]})
+        connection.execute(text('''
+            INSERT INTO "VISIT_STATUS_HISTORY"
+                ("VISIT_UNIQN", "BEFORE_STATUS", "AFTER_STATUS", "CHANGED_BY", "REASON")
+            VALUES (:visit_id, :before, :after, :changed_by, NULL)
+        '''), {"visit_id": visit["VISIT_UNIQN"], "before": before,
+                "after": after, "changed_by": account["ACCOUNT_UNIQN"]})
+    return {"message": "환자 상태가 변경되었습니다.", "patient": {
+        "id": patient_id, "visitId": visit["VISIT_UNIQN"], "status": request.status,
+        "doctor": request.doctor if starting else None}}
 
 
 @app.delete("/api/waiting/{patient_id}")
@@ -1453,129 +1177,6 @@ from datetime import datetime
 from uuid import uuid4
 
 
-
-# Consultation persistence shared by SAVE/CORRECT/PAUSE/COMPLETE.
-def _write_case(connection, case, payload, account_id):
-    from sqlalchemy import bindparam
-    from sqlalchemy.dialects.postgresql import JSONB
-    search_id = payload.diseaseSearchId
-    selected_id = payload.selectedDiseaseId
-    manual = (payload.manualDiseaseText or '').strip() or None
-    if (search_id is None) != (selected_id is None) or (selected_id is not None and manual):
-        raise HTTPException(400, detail="병증 검색/선택 ID가 일치해야 하며 직접 입력과 동시에 선택할 수 없습니다.")
-    search_int = None
-    if search_id is not None:
-        try:
-            search_int = int(search_id)
-            if str(search_int) != str(search_id):
-                raise ValueError()
-        except (TypeError, ValueError):
-            raise HTTPException(400, detail="올바르지 않은 병증 검색 ID입니다.")
-        found = connection.execute(text('''SELECT 1 FROM "SEARCH_LOG" l JOIN "SEARCH_RESULT" r
-            ON r."SEARCH_UNIQN"=l."SEARCH_UNIQN"
-            WHERE l."SEARCH_UNIQN"=:search AND l."CASE_UNIQN"=:case
-              AND r."DIS_UNIQN"=:disease LIMIT 1'''),
-            {"search":search_int,"case":case["CASE_UNIQN"],"disease":selected_id}).scalar_one_or_none()
-        if found is None:
-            raise HTTPException(400, detail="이 상담에서 검색한 병증 후보가 아닙니다.")
-    if payload.operation == 'CORRECT' and not (payload.reason or '').strip():
-        raise HTTPException(400, detail="정정 사유가 필요합니다.")
-    columns = {"SYMPTOM_TEXT":payload.symptoms, "CONSULTATION_TEXT":payload.consultationText,
-               "SPECIAL_NOTE":payload.additionalNotes,"DISEASE_SEARCH_UNIQN":search_int,
-               "SELECTED_DIS_UNIQN":selected_id,"MANUAL_DISEASE_TEXT":manual}
-    before = {key:case[key] for key in columns}
-    changed = {key:val for key,val in columns.items() if before[key]!=val}
-    if payload.operation == 'CORRECT' and changed:
-        statement = text('''INSERT INTO "CASE_REVISION" ("CASE_UNIQN","CHANGED_FIELDS","BEFORE_VALUES",
-            "AFTER_VALUES","CHANGED_BY","REASON") VALUES (:case,:fields,:before,:after,:by,:reason)''').bindparams(
-                bindparam('fields',type_=JSONB),bindparam('before',type_=JSONB),bindparam('after',type_=JSONB))
-        connection.execute(statement,{"case":case["CASE_UNIQN"],"fields":list(changed),
-            "before":{k:before[k] for k in changed},"after":changed,"by":account_id,
-            "reason":payload.reason.strip()})
-    connection.execute(text('''UPDATE "CASE_RECORD" SET "SYMPTOM_TEXT"=:symptoms,
-        "CONSULTATION_TEXT"=:consultation,"SPECIAL_NOTE"=:notes,
-        "DISEASE_SEARCH_UNIQN"=:search,"SELECTED_DIS_UNIQN"=:disease,
-        "MANUAL_DISEASE_TEXT"=:manual,"UPDATED_AT"=CURRENT_TIMESTAMP
-        WHERE "CASE_UNIQN"=:case'''),{"symptoms":payload.symptoms,"consultation":payload.consultationText,
-        "notes":payload.additionalNotes,"search":search_int,"disease":selected_id,
-        "manual":manual,"case":case["CASE_UNIQN"]})
-
-
-def _load_case_for_write(connection, case_id, account, *, allow_completed=False):
-    row = connection.execute(text('''SELECT c.*, v."STATUS_CD", v."DOCTOR_UNIQN"
-        FROM "CASE_RECORD" c JOIN "VISIT" v ON v."VISIT_UNIQN"=c."VISIT_UNIQN"
-        JOIN "PATIENT" p ON p."PATIENT_UNIQN"=v."PATIENT_UNIQN"
-        WHERE c."CASE_UNIQN"=:case AND p."CLINIC_UNIQN"=:clinic
-        FOR UPDATE OF c, v'''),{"case":case_id,"clinic":account["CLINIC_UNIQN"]}).mappings().first()
-    if row is None:
-        raise HTTPException(404, detail="상담기록이 없습니다.")
-    if row["AUTHOR_UNIQN"]!=account["ACCOUNT_UNIQN"] or row["DOCTOR_UNIQN"]!=account["ACCOUNT_UNIQN"]:
-        raise HTTPException(403, detail="담당 한의사만 상담기록을 변경할 수 있습니다.")
-    if row["STATUS_CD"]!='IN_PROGRESS' and not (allow_completed and row["STATUS_CD"]=='COMPLETED'):
-        raise HTTPException(409, detail="현재 상태에서 상담기록을 변경할 수 없습니다.")
-    return row
-
-@app.patch('/api/consultations/{case_id}')
-def patch_consultation(case_id:int, request:ConsultationWrite, account=Depends(require_authenticated_user)):
-    if account['ROLE_CD']!='DOCTOR':
-        raise HTTPException(403,detail='한의사 권한이 필요합니다.')
-    with engine.begin() as connection:
-        case=_load_case_for_write(connection,case_id,account,allow_completed=request.operation=='CORRECT')
-        _write_case(connection,case,request,account['ACCOUNT_UNIQN'])
-    return {'message':'상담일지가 저장되었습니다.','record':{'id':str(case_id),'caseId':case_id,
-        'visitId':case['VISIT_UNIQN'],'symptoms':request.symptoms,'consultationText':request.consultationText,
-        'additionalNotes':request.additionalNotes}}
-
-@app.post('/api/consultations/{case_id}/complete')
-def complete_consultation(case_id:int, request:ConsultationWrite, account=Depends(require_authenticated_user)):
-    if account['ROLE_CD']!='DOCTOR':
-        raise HTTPException(403,detail='한의사 권한이 필요합니다.')
-    if not request.symptoms.strip() or not request.consultationText.strip():
-        raise HTTPException(400,detail='진료 완료 시 증상과 상담 내용이 필요합니다.')
-    with engine.begin() as connection:
-        case=_load_case_for_write(connection,case_id,account)
-        _write_case(connection,case,request,account['ACCOUNT_UNIQN'])
-        connection.execute(text('''UPDATE "VISIT" SET "STATUS_CD"='COMPLETED',
-          "COMPLETED_AT"=CURRENT_TIMESTAMP WHERE "VISIT_UNIQN"=:visit'''),{'visit':case['VISIT_UNIQN']})
-        connection.execute(text('''INSERT INTO "VISIT_STATUS_HISTORY"
-          ("VISIT_UNIQN","BEFORE_STATUS","AFTER_STATUS","CHANGED_BY","REASON")
-          VALUES (:visit,'IN_PROGRESS','COMPLETED',:by,NULL)'''),
-          {'visit':case['VISIT_UNIQN'],'by':account['ACCOUNT_UNIQN']})
-    return {'message':'진료가 완료되었습니다.','record':{'caseId':case_id,'visitId':case['VISIT_UNIQN'],'status':'COMPLETED'}}
-
-@app.get('/api/consultations/{case_id}')
-def get_consultation_detail(case_id:int,account=Depends(require_authenticated_user)):
-    with engine.connect() as connection:
-        row=connection.execute(text('''SELECT c.*,v."PATIENT_UNIQN",p."NAME" AS "PATIENT_NAME"
-          FROM "CASE_RECORD" c JOIN "VISIT" v ON v."VISIT_UNIQN"=c."VISIT_UNIQN"
-          JOIN "PATIENT" p ON p."PATIENT_UNIQN"=v."PATIENT_UNIQN"
-          WHERE c."CASE_UNIQN"=:case AND p."CLINIC_UNIQN"=:clinic'''),
-          {'case':case_id,'clinic':account['CLINIC_UNIQN']}).mappings().first()
-    if row is None: raise HTTPException(404,detail='상담기록이 없습니다.')
-    return {'record':{'id':str(row['CASE_UNIQN']),'caseId':row['CASE_UNIQN'],
-      'visitId':row['VISIT_UNIQN'],'patientId':row['PATIENT_UNIQN'],
-      'patientName':row['PATIENT_NAME'],'symptoms':row['SYMPTOM_TEXT'] or '',
-      'consultationText':row['CONSULTATION_TEXT'] or '',
-      'additionalNotes':row['SPECIAL_NOTE'],
-      'diseaseSearchId':str(row['DISEASE_SEARCH_UNIQN']) if row['DISEASE_SEARCH_UNIQN'] is not None else None,
-      'selectedDiseaseId':row['SELECTED_DIS_UNIQN'],
-      'manualDiseaseText':row['MANUAL_DISEASE_TEXT']}}
-
-@app.get('/api/consultations/{case_id}/revisions')
-def get_consultation_revisions(case_id:int,account=Depends(require_authenticated_user)):
-    with engine.connect() as connection:
-        exists=connection.execute(text('''SELECT 1 FROM "CASE_RECORD" c JOIN "VISIT" v ON v."VISIT_UNIQN"=c."VISIT_UNIQN"
-          JOIN "PATIENT" p ON p."PATIENT_UNIQN"=v."PATIENT_UNIQN"
-          WHERE c."CASE_UNIQN"=:case AND p."CLINIC_UNIQN"=:clinic'''),
-          {'case':case_id,'clinic':account['CLINIC_UNIQN']}).scalar_one_or_none()
-        if not exists: raise HTTPException(404,detail='상담기록이 없습니다.')
-        rows=connection.execute(text('''SELECT * FROM "CASE_REVISION" WHERE "CASE_UNIQN"=:case
-          ORDER BY "CHANGED_AT" DESC,"REVISION_UNIQN" DESC'''),{'case':case_id}).mappings().all()
-    return {'records':[{'id':r['REVISION_UNIQN'],'changedFields':r['CHANGED_FIELDS'],
-       'beforeValues':r['BEFORE_VALUES'],'afterValues':r['AFTER_VALUES'],
-       'changedBy':r['CHANGED_BY'],'changedAt':r['CHANGED_AT'].isoformat(),
-       'reason':r['REASON']} for r in rows]}
-
 class ConsultationRecord(BaseModel):
     patientId: int
     symptoms: str
@@ -1583,17 +1184,105 @@ class ConsultationRecord(BaseModel):
     additionalNotes: str = ""
 
 
-consultation_records = []
 
 
 
-@app.post("/api/consultations", status_code=410)
-def deprecated_save_consultation():
-    raise HTTPException(410,detail="기존 저장 API는 사용하지 않습니다. PATCH /api/consultations/{caseId}를 사용하세요.")
+@app.post("/api/consultations", status_code=201)
+def save_consultation(
+    request: ConsultationRecord,
+    account=Depends(require_clinical_user)
+):
+    if not request.symptoms.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="증상을 입력해 주세요."
+        )
+
+    with engine.begin() as connection:
+        patient = connection.execute(
+            text("""
+                SELECT
+                    p."NAME",
+                    v."VISIT_UNIQN"
+                FROM "VISIT" v
+                JOIN "PATIENT" p
+                    ON v."PATIENT_UNIQN" = p."PATIENT_UNIQN"
+                WHERE v."PATIENT_UNIQN" = :patient_id
+                  AND p."CLINIC_UNIQN" = :clinic_id
+                  AND v."STATUS_CD" = 'IN_PROGRESS'
+                  AND v."DOCTOR_UNIQN" = :doctor_id
+                ORDER BY v."VISIT_UNIQN" DESC
+                LIMIT 1
+                FOR UPDATE OF v
+            """),
+            {
+                "patient_id": request.patientId,
+                "clinic_id": account["CLINIC_UNIQN"],
+                "doctor_id": account["ACCOUNT_UNIQN"]
+            }
+        ).mappings().first()
+
+        if patient is None:
+            raise HTTPException(
+                status_code=409,
+                detail="진료 중인 환자만 상담일지를 저장할 수 있습니다."
+            )
+
+        existing_case_id = connection.execute(
+            text('''SELECT "CASE_UNIQN" FROM "CASE_RECORD"
+                    WHERE "VISIT_UNIQN" = :visit_id AND "AUTHOR_UNIQN" = :author_id
+                    ORDER BY "CASE_UNIQN" DESC LIMIT 1'''),
+            {"visit_id": patient["VISIT_UNIQN"], "author_id": account["ACCOUNT_UNIQN"]}
+        ).scalar_one_or_none()
+        values = {
+            "visit_id": patient["VISIT_UNIQN"],
+            "author_id": account["ACCOUNT_UNIQN"],
+            "symptoms": request.symptoms.strip(),
+            "consultation_text": ", ".join(request.selectedCandidates),
+            "special_note": request.additionalNotes.strip()
+        }
+        if existing_case_id is None:
+            case_id = connection.execute(text('''
+                INSERT INTO "CASE_RECORD" ("VISIT_UNIQN", "AUTHOR_UNIQN", "SYMPTOM_TEXT", "CONSULTATION_TEXT", "SPECIAL_NOTE")
+                VALUES (:visit_id, :author_id, :symptoms, :consultation_text, :special_note)
+                RETURNING "CASE_UNIQN"
+            '''), values).scalar_one()
+        else:
+            case_id = existing_case_id
+            connection.execute(text('''
+                UPDATE "CASE_RECORD" SET "SYMPTOM_TEXT" = :symptoms,
+                    "CONSULTATION_TEXT" = :consultation_text, "SPECIAL_NOTE" = :special_note
+                WHERE "CASE_UNIQN" = :case_id
+            '''), {**values, "case_id": case_id})
+
+        connection.execute(
+            text("""
+                UPDATE "VISIT"
+                SET
+                    "STATUS_CD" = 'COMPLETED',
+                    "COMPLETED_AT" = CURRENT_TIMESTAMP
+                WHERE "VISIT_UNIQN" = :visit_id
+            """),
+            {"visit_id": patient["VISIT_UNIQN"]}
+        )
+
+    record = {
+        "id": str(case_id),
+        **request.model_dump(),
+        "patientName": patient["NAME"],
+        "createdAt": datetime.now().astimezone().isoformat()
+    }
+
+
+    return {
+        "message": "상담일지가 저장되었습니다.",
+        "record": record
+    }
+
 
 
 @app.get("/api/consultations")
-def get_consultations(account=Depends(require_authenticated_user)):
+def get_consultations(account=Depends(require_clinical_user)):
     with engine.connect() as connection:
         rows = connection.execute(
             text("""
@@ -1650,8 +1339,6 @@ class PrescriptionRecord(BaseModel):
     herbs: list[HerbItem]
 
 
-# 임시 처방전 목록 (서버 재시작 시 초기화)
-prescription_records = []
 
 
 @app.post("/api/prescriptions", status_code=201)
@@ -1888,6 +1575,125 @@ def get_prescriptions(
 
     return {"records": records}
 
+
+# 기업 원본 처방명 검색
+@app.get("/api/prescription-catalog/search")
+def search_prescription_catalog(
+    q: str = "",
+    account=Depends(require_authenticated_user)
+):
+    keyword = q.strip()
+
+    if not keyword:
+        return {"results": []}
+
+    with engine.connect() as connection:
+        rows = connection.execute(
+            text("""
+                SELECT
+                    "PRESP_UNIQN",
+                    "PRESP_NM"
+                FROM "PRESP"
+                WHERE "PRESP_NM" ILIKE :keyword
+                ORDER BY
+                    CASE
+                        WHEN "PRESP_NM" ILIKE :prefix THEN 0
+                        ELSE 1
+                    END,
+                    "PRESP_NM",
+                    "PRESP_UNIQN"
+                LIMIT 50
+            """),
+            {
+                "keyword": f"%{keyword}%",
+                "prefix": f"{keyword}%"
+            }
+        ).mappings().all()
+
+    return {
+        "results": [
+            {
+                "id": row["PRESP_UNIQN"],
+                "name": row["PRESP_NM"]
+            }
+            for row in rows
+        ]
+    }
+
+
+# 기업 원본 처방 상세 조회
+
+@app.get("/api/prescription-catalog/{presp_id}")
+def get_prescription_catalog_detail(
+    presp_id: int,
+    account=Depends(require_authenticated_user)
+):
+    with engine.connect() as connection:
+        row = connection.execute(
+            text("""
+                SELECT
+                    "PRESP_UNIQN",
+                    "ORIG_CD_NM",
+                    "PRESP_NM",
+                    "PRESP_CONT",
+                    "DISP_USG_CONT",
+                    "TABO_CONT"
+                FROM "PRESP"
+                WHERE "PRESP_UNIQN" = :presp_id
+            """),
+            {"presp_id": presp_id}
+        ).mappings().first()
+
+        if row is None:
+            raise HTTPException(
+                status_code=404,
+                detail="처방 정보를 찾을 수 없습니다."
+            )
+
+        herb_rows = connection.execute(
+            text("""
+                SELECT
+                    r."MED_UNIQN",
+                    m."MED_NM",
+                    r."MED_SPEC_REP",
+                    r."UNT",
+                    r."UNT_COEFF"
+                FROM "PRESP_MED_RSHIP" AS r
+                JOIN "MED" AS m
+                    ON r."MED_UNIQN" = m."MED_UNIQN"
+                WHERE r."PRESP_UNIQN" = :presp_id
+                ORDER BY r."RSHIP_UNIQN"
+            """),
+            {"presp_id": presp_id}
+        ).mappings().all()
+
+    herbs = [
+        {
+            "id": herb["MED_UNIQN"],
+            "name": herb["MED_NM"],
+            "specification": herb["MED_SPEC_REP"] or "",
+            "amount": (
+                float(herb["UNT_COEFF"])
+                if herb["UNT_COEFF"] is not None
+                else None
+            ),
+            "unit": herb["UNT"] or ""
+        }
+        for herb in herb_rows
+    ]
+
+    return {
+        "id": row["PRESP_UNIQN"],
+        "originalCode": row["ORIG_CD_NM"],
+        "name": row["PRESP_NM"],
+        "description": row["PRESP_CONT"] or "",
+        "usage": row["DISP_USG_CONT"] or "",
+        "cautions": row["TABO_CONT"] or "",
+        "herbs": herbs
+    }
+
+
+
 @app.post("/api/prescriptions/{prescription_id}/send")
 def send_prescription(
     prescription_id: int,
@@ -1980,6 +1786,142 @@ def send_prescription(
         "status": "전송완료"
     }
 
+@app.post("/api/prescriptions/{prescription_id}/print", status_code=201)
+def record_prescription_print(
+    prescription_id: int,
+    account=Depends(require_authenticated_user)
+):
+    # 안내데스크만 인쇄 가능
+    if account["IS_OWNER"] or account["ROLE_CD"] != "DESK":
+        raise HTTPException(
+            status_code=403,
+            detail="안내데스크 직원만 처방전을 인쇄할 수 있습니다."
+        )
+
+    with engine.begin() as connection:
+        # 같은 한의원에서 수신한 처방전인지 확인
+        prescription = connection.execute(
+            text("""
+                SELECT v."RX_VERSION_UNIQN"
+                FROM "PATIENT_PRESP" p
+                JOIN "CASE_RECORD" c
+                    ON p."CASE_UNIQN" = c."CASE_UNIQN"
+                JOIN "VISIT" visit
+                    ON c."VISIT_UNIQN" = visit."VISIT_UNIQN"
+                JOIN "PATIENT" patient
+                    ON visit."PATIENT_UNIQN" = patient."PATIENT_UNIQN"
+                JOIN LATERAL (
+                    SELECT "RX_VERSION_UNIQN"
+                    FROM "PATIENT_PRESP_VERSION"
+                    WHERE "RX_UNIQN" = p."RX_UNIQN"
+                    ORDER BY "VERSION_NO" DESC,
+                             "RX_VERSION_UNIQN" DESC
+                    LIMIT 1
+                ) v ON TRUE
+                JOIN "PRESP_DELIVERY" d
+                    ON d."RX_VERSION_UNIQN" = v."RX_VERSION_UNIQN"
+                WHERE p."RX_UNIQN" = :prescription_id
+                  AND patient."CLINIC_UNIQN" = :clinic_id
+                  AND p."IS_DELETED" = FALSE
+                LIMIT 1
+            """),
+            {
+                "prescription_id": prescription_id,
+                "clinic_id": account["CLINIC_UNIQN"]
+            }
+        ).scalar_one_or_none()
+
+        if prescription is None:
+            raise HTTPException(
+                status_code=404,
+                detail="수신한 처방전을 찾을 수 없습니다."
+            )
+
+        # 인쇄 요청 이력 저장
+        print_id = connection.execute(
+            text("""
+                INSERT INTO "PRESP_PRINT_HISTORY" (
+                    "RX_VERSION_UNIQN",
+                    "PRINTED_BY"
+                )
+                VALUES (
+                    :rx_version_id,
+                    :printed_by
+                )
+                RETURNING "PRINT_UNIQN"
+            """),
+            {
+                "rx_version_id": prescription,
+                "printed_by": account["ACCOUNT_UNIQN"]
+            }
+        ).scalar_one()
+
+    return {
+        "message": "처방전 인쇄 요청이 기록되었습니다.",
+        "printId": print_id,
+        "prescriptionId": prescription_id,
+        "rxVersionId": prescription
+    }
+
+@app.get("/api/prescriptions/{prescription_id}/print-history")
+def get_prescription_print_history(
+    prescription_id: int,
+    account=Depends(require_authenticated_user)
+):
+    if account["IS_OWNER"] or account["ROLE_CD"] != "DESK":
+        raise HTTPException(
+            status_code=403,
+            detail="안내데스크 직원만 인쇄 이력을 조회할 수 있습니다."
+        )
+
+    with engine.connect() as connection:
+        result = connection.execute(
+            text("""
+                SELECT
+                    v."RX_VERSION_UNIQN",
+                    COUNT(h."PRINT_UNIQN") AS print_count
+                FROM "PATIENT_PRESP" p
+                JOIN "CASE_RECORD" c
+                    ON p."CASE_UNIQN" = c."CASE_UNIQN"
+                JOIN "VISIT" visit
+                    ON c."VISIT_UNIQN" = visit."VISIT_UNIQN"
+                JOIN "PATIENT" patient
+                    ON visit."PATIENT_UNIQN" = patient."PATIENT_UNIQN"
+                JOIN LATERAL (
+                    SELECT "RX_VERSION_UNIQN"
+                    FROM "PATIENT_PRESP_VERSION"
+                    WHERE "RX_UNIQN" = p."RX_UNIQN"
+                    ORDER BY "VERSION_NO" DESC,
+                             "RX_VERSION_UNIQN" DESC
+                    LIMIT 1
+                ) v ON TRUE
+                JOIN "PRESP_DELIVERY" d
+                    ON d."RX_VERSION_UNIQN" = v."RX_VERSION_UNIQN"
+                LEFT JOIN "PRESP_PRINT_HISTORY" h
+                    ON h."RX_VERSION_UNIQN" = v."RX_VERSION_UNIQN"
+                WHERE p."RX_UNIQN" = :prescription_id
+                  AND patient."CLINIC_UNIQN" = :clinic_id
+                  AND p."IS_DELETED" = FALSE
+                GROUP BY v."RX_VERSION_UNIQN"
+            """),
+            {
+                "prescription_id": prescription_id,
+                "clinic_id": account["CLINIC_UNIQN"]
+            }
+        ).mappings().first()
+
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="수신한 처방전을 찾을 수 없습니다."
+        )
+
+    return {
+        "prescriptionId": prescription_id,
+        "rxVersionId": result["RX_VERSION_UNIQN"],
+        "printCount": result["print_count"],
+        "hasPrinted": result["print_count"] > 0
+    }
 
 @app.patch("/api/prescriptions/{prescription_id}")
 def update_prescription(
@@ -2262,6 +2204,9 @@ def login(request: LoginRequest, response: Response):
             detail="이메일 또는 비밀번호가 올바르지 않습니다."
         )
 
+    if account["CLINIC_UNIQN"] is None:
+        raise HTTPException(status_code=403, detail="소속 한의원 정보가 없습니다.")
+
     session_token = session_signer.dumps({
         "accountId": account["ACCOUNT_UNIQN"]
     })
@@ -2282,58 +2227,18 @@ def login(request: LoginRequest, response: Response):
             "id": account["ACCOUNT_UNIQN"],
             "clinicId": account["CLINIC_UNIQN"],
             "email": account["EMAIL"],
-            "role": "DIRECTOR" if account["IS_OWNER"] else account["ROLE_CD"]
+            "role": account["ROLE_CD"],
+            "isOwner": bool(account["IS_OWNER"])
         }
     }
 
 @app.get("/api/auth/me")
-def get_current_user(request: Request):
-    token = request.cookies.get("hanui_session")
-
-    if not token:
-        raise HTTPException(
-            status_code=401,
-            detail="로그인이 필요합니다."
-        )
-
-    try:
-        session_data = session_signer.loads(
-            token,
-            max_age=60 * 60 * 8
-        )
-    except (BadSignature, SignatureExpired):
-        raise HTTPException(
-            status_code=401,
-            detail="로그인 세션이 유효하지 않습니다."
-        )
-
-    with engine.connect() as connection:
-        account = connection.execute(
-            text("""
-                SELECT
-                    "ACCOUNT_UNIQN",
-                    "CLINIC_UNIQN",
-                    "EMAIL",
-                    "ROLE_CD",
-                    "IS_OWNER",
-                    "STATUS_CD"
-                FROM "ACCOUNT"
-                WHERE "ACCOUNT_UNIQN" = :account_id
-            """),
-            {"account_id": session_data["accountId"]}
-        ).mappings().first()
-
-    if account is None or account["STATUS_CD"] != "ACTIVE":
-        raise HTTPException(
-            status_code=401,
-            detail="사용할 수 없는 계정입니다."
-        )
-
+def get_current_user(account=Depends(require_authenticated_user)):
     return {
         "id": account["ACCOUNT_UNIQN"],
         "clinicId": account["CLINIC_UNIQN"],
-        "email": account["EMAIL"],
-        "role": "DIRECTOR" if account["IS_OWNER"] else account["ROLE_CD"]
+        "role": account["ROLE_CD"],
+        "isOwner": bool(account["IS_OWNER"])
     }
 
 @app.post("/api/auth/logout")
