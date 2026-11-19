@@ -1,5 +1,6 @@
 
 import { useEffect, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 const testPatients = [
   {
     id: 1,
@@ -25,7 +26,10 @@ const testPatients = [
 ]
 
 export default function Patients({ currentRole }) {
-  const [selectedMenu, setSelectedMenu] = useState(null)
+  const location = useLocation()
+  const [selectedMenu, setSelectedMenu] = useState(
+    location.state?.view === 'history' ? 'history' : 'search'
+  )
   const [searchKeyword, setSearchKeyword] = useState('')
   const [patients, setPatients] = useState([])
   const [editPatient, setEditPatient] = useState(null)
@@ -34,7 +38,7 @@ export default function Patients({ currentRole }) {
 useEffect(() => {
   const loadPatients = async () => {
     try {
-      const response = await fetch('http://127.0.0.1:8000/api/patients', {
+      const response = await fetch('/api/patients', {
         credentials: 'include',
       })
 
@@ -56,7 +60,7 @@ useEffect(() => {
   const [consultationRecords, setConsultationRecords] = useState([])
   const [prescriptionRecords, setPrescriptionRecords] = useState([])
   const [historyDate, setHistoryDate] = useState(
-    new Date().toLocaleDateString('en-CA')
+    location.state?.date || new Date().toLocaleDateString('en-CA')
   )
   const [selectedRecord, setSelectedRecord] = useState(null)
   const [selectedPrescription, setSelectedPrescription] = useState(null)
@@ -68,7 +72,7 @@ useEffect(() => {
     if (!detailPatient) return
 
     try {
-      const response = await fetch('http://127.0.0.1:8000/api/waiting', {
+      const response = await fetch('/api/waiting', {
         method: 'POST',
         credentials: 'include',
         headers: {
@@ -140,7 +144,7 @@ const saveEditedPatient = async () => {
 
   try {
     const response = await fetch(
-      `http://127.0.0.1:8000/api/patients/${editPatient.id}`,
+      `/api/patients/${editPatient.id}`,
       {
         method: 'PATCH',
         credentials: 'include',
@@ -211,7 +215,7 @@ const validatePatient = async (registerWaiting = false) => {
   }
 
   try {
-    const response = await fetch('http://127.0.0.1:8000/api/patients', {
+    const response = await fetch('/api/patients', {
       method: 'POST',
       credentials: 'include',
       headers: {
@@ -230,7 +234,7 @@ const validatePatient = async (registerWaiting = false) => {
     setPatients((prev) => [...prev, data.patient])
 
     if (registerWaiting) {
-      const waitingResponse = await fetch('http://127.0.0.1:8000/api/waiting', {
+      const waitingResponse = await fetch('/api/waiting', {
         method: 'POST',
         credentials: 'include',
         headers: {
@@ -280,7 +284,7 @@ const validatePatient = async (registerWaiting = false) => {
     const loadPrescriptionRecords = async () => {
       try {
         const response = await fetch(
-          'http://127.0.0.1:8000/api/prescriptions',
+          '/api/prescriptions',
           {
             credentials: 'include',
           }
@@ -303,7 +307,7 @@ const validatePatient = async (registerWaiting = false) => {
           setHistoryError('')
 
         const response = await fetch(
-          'http://127.0.0.1:8000/api/consultations',
+          '/api/consultations',
           {
             credentials: 'include',
           }

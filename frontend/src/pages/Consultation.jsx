@@ -14,39 +14,13 @@ export default function Consultation() {
   const [additionalNotes, setAdditionalNotes] = useState('')
   const [savedConsultation, setSavedConsultation] = useState(false)
   const [savedConsultationId, setSavedConsultationId] = useState(null)
-  const [consultationText, setConsultationText] = useState('')
-  const [caseId, setCaseId] = useState(null)
 
   const [patients, setPatients] = useState([])
   const [selectedPatientId, setSelectedPatientId] = useState('')
   useEffect(() => {
-    const visitId = patient?.visitId
-    if (!visitId) return
-    fetch(`http://127.0.0.1:8000/api/visits?scope=all`, {credentials:'include'})
-      .then(r => r.ok ? r.json() : Promise.reject(new Error('방문 조회 실패')))
-      .then(async data => {
-        const visit = (data.records || []).find(v => Number(v.visitId) === Number(visitId))
-        console.log('선택한 방문 정보:', visit)
-        if (visit?.status !== 'IN_PROGRESS') return
-
-        if (visit.caseId == null) {
-          console.warn('상담일지 ID가 없는 방문입니다.', visit)
-          return
-        }
-        const response = await fetch(`http://127.0.0.1:8000/api/consultations/${visit.caseId}`, {credentials:'include'})
-        if (response.ok) {
-          const detail = (await response.json()).record
-          setCaseId(detail.caseId)
-          setSymptoms(detail.symptoms || '')
-          setConsultationText(detail.consultationText || '')
-          setAdditionalNotes(detail.additionalNotes || '')
-        }
-      }).catch(console.error)
-  }, [patient?.visitId])
-  useEffect(() => {
     const fetchPatients = async () => {
       try {
-        const response = await fetch('http://127.0.0.1:8000/api/waiting', {
+        const response = await fetch('/api/waiting', {
           credentials: 'include',
         })
 
@@ -162,23 +136,52 @@ export default function Consultation() {
 
 
   const validateConsultation = async () => {
-    const activePatient = patient || patients.find(p => String(p.id) === String(selectedPatientId))
-    if (!activePatient?.visitId) { alert('진료 중인 방문을 선택해 주세요.'); return }
-    if (!caseId) { alert('상담일지 ID를 찾지 못했습니다. 진료 시작 후 화면을 다시 열어주세요.'); return }
+    if (!patient?.id) {
+      alert('환자 정보가 없습니다.')
+      return
+    }
+
+    if (!symptoms.trim()) {
+      alert('증상을 입력해 주세요.')
+      return
+    }
+
     try {
-      const response = await fetch(`http://127.0.0.1:8000/api/consultations/${caseId}`, {
-        method:'PATCH', credentials:'include',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({operation:'SAVE', symptoms, consultationText,
-          additionalNotes, diseaseSearchId:null, selectedDiseaseId:null,
-          manualDiseaseText:selectedCandidates.join(', ') || null, reason:null})
-      })
+      const response = await fetch(
+          '/api/consultations',
+          {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              patientId: patient.id,
+              symptoms: symptoms.trim(),
+              selectedCandidates,
+              additionalNotes: additionalNotes.trim(),
+            }),
+          }
+      )
+
       const data = await response.json()
-      if (!response.ok) { alert(data.detail || '상담일지 저장에 실패했습니다.'); return }
-      setSavedConsultationId(String(caseId))
+
+      if (!response.ok) {
+        alert(
+            typeof data.detail === 'string'
+                ? data.detail
+                : '상담일지 저장에 실패했습니다.'
+        )
+        return
+      }
+
+      setSavedConsultationId(data.record.id)
       setSavedConsultation(true)
-      alert('상담일지가 저장되었습니다. (진료는 완료되지 않았습니다.)')
-    } catch(error) { console.error(error); alert('서버 연결에 실패했습니다.') }
+      alert('상담일지가 저장되었습니다.')
+    } catch (error) {
+      console.error('상담일지 저장 오류:', error)
+      alert('서버 연결에 실패했습니다.')
+    }
   }
 
   return (
@@ -369,13 +372,7 @@ export default function Consultation() {
               />
 
               <div style={{marginTop: '20px', marginBottom: '12px'}}>
-                <div style={{margin:'16px 0'}}>
-                    <label htmlFor="consultation-text">상담 내용</label>
-                    <textarea id="consultation-text" value={consultationText}
-                      onChange={e=>setConsultationText(e.target.value)} rows={4}
-                      style={{display:'block',width:'100%',marginTop:8}} />
-                  </div>
-                  <button
+                <button
                     type="button"
                     onClick={validateConsultation}
                     disabled={savedConsultation}

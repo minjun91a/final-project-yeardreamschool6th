@@ -9,7 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from itsdangerous import URLSafeTimedSerializer
 from fastapi import Response
-from auth import verify_password
+from auth import verify_password, hash_password
 from models import Patient
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
@@ -601,12 +601,17 @@ def get_waiting_patients(
     return {"patients": patients}
 
 
+
 def require_clinical_user(request: Request):
     account = require_authenticated_user(request)
-    if account["ROLE_CD"] != "DOCTOR":
-        raise HTTPException(status_code=403, detail="진료·상담 권한이 없습니다.")
-    return account
 
+    if not account["IS_OWNER"] and account["ROLE_CD"] != "DOCTOR":
+        raise HTTPException(
+            status_code=403,
+            detail="진료·상담 권한이 없습니다."
+        )
+
+    return account
 
 
 @app.post("/api/waiting")
@@ -2241,6 +2246,211 @@ def get_current_user(account=Depends(require_authenticated_user)):
         "isOwner": bool(account["IS_OWNER"])
     }
 
+
+@app.get("/api/profile")
+def get_my_profile(
+    account=Depends(require_authenticated_user)
+):
+    with engine.connect() as connection:
+        profile = connection.execute(
+            text("""
+                SELECT
+                    "ACCOUNT_UNIQN",
+                    "EMAIL",
+                    "NAME",
+                    "PHONE",
+                    "ROLE_CD",
+                    "IS_OWNER"
+                FROM "ACCOUNT"
+                WHERE "ACCOUNT_UNIQN" = :account_id
+                  AND "CLINIC_UNIQN" = :clinic_id
+                  AND "STATUS_CD" = 'ACTIVE'
+            """),
+            {
+                "account_id": account["ACCOUNT_UNIQN"],
+                "clinic_id": account["CLINIC_UNIQN"]
+            }
+        ).mappings().first()
+
+    if profile is None:
+        raise HTTPException(
+            status_code=404,
+            detail="프로필 정보를 찾을 수 없습니다."
+        )
+
+    return {
+        "id": profile["ACCOUNT_UNIQN"],
+        "email": profile["EMAIL"],
+        "name": profile["NAME"],
+        "phone": profile["PHONE"] or "",
+        "role": (
+            "원장"
+            if profile["IS_OWNER"]
+            else "한의사"
+            if profile["ROLE_CD"] == "DOCTOR"
+            else "안내데스크"
+        )
+    }
+
+
+class ProfileUpdateRequest(BaseModel):
+    name: str
+    phone: str | None = None
+
+
+@app.patch("/api/profile")
+def update_my_profile(
+    request: ProfileUpdateRequest,
+    account=Depends(require_authenticated_user)
+):
+    name = request.name.strip()
+    phone = (request.phone or "").strip()
+
+    if not name:
+        raise HTTPException(
+            status_code=400,
+            detail="이름을 입력해 주세요."
+        )
+
+    with engine.begin() as connection:
+        profile = connection.execute(
+            text("""
+                UPDATE "ACCOUNT"
+                SET
+                    "NAME" = :name,
+                    "PHONE" = :phone
+                WHERE "ACCOUNT_UNIQN" = :account_id
+                  AND "CLINIC_UNIQN" = :clinic_id
+                  AND "STATUS_CD" = 'ACTIVE'
+                RETURNING
+                    "ACCOUNT_UNIQN",
+                    "EMAIL",
+                    "NAME",
+                    "PHONE",
+                    "ROLE_CD",
+                    "IS_OWNER"
+            """),
+            {
+                "name": name,
+                "phone": phone or None,
+                "account_id": account["ACCOUNT_UNIQN"],
+                "clinic_id": account["CLINIC_UNIQN"]
+            }
+        ).mappings().first()
+
+    if profile is None:
+        raise HTTPException(
+            status_code=404,
+            detail="프로필 정보를 찾을 수 없습니다."
+        )
+
+    return {
+        "message": "계정 정보가 수정되었습니다.",
+        "profile": {
+            "id": profile["ACCOUNT_UNIQN"],
+            "email": profile["EMAIL"],
+            "name": profile["NAME"],
+            "phone": profile["PHONE"] or "",
+            "role": (
+                "원장"
+                if profile["IS_OWNER"]
+                else "한의사"
+                if profile["ROLE_CD"] == "DOCTOR"
+                else "안내데스크"
+            )
+        }
+    }
+
+class PasswordChangeRequest(BaseModel):
+    currentPassword: str
+    newPassword: str
+    confirmPassword: str
+
+
+@app.patch("/api/profile/password")
+def change_my_password(
+    request: PasswordChangeRequest,
+    account=Depends(require_authenticated_user)
+):
+    # 1. 새 비밀번호 유효성 검사
+    if len(request.newPassword) < 8:
+        raise HTTPException(
+            status_code=400,
+            detail="새 비밀번호는 8자 이상이어야 합니다."
+        )
+
+    # 2. 새 비밀번호 확인
+    if request.newPassword != request.confirmPassword:
+        raise HTTPException(
+            status_code=400,
+            detail="새 비밀번호가 일치하지 않습니다."
+        )
+
+    # 3. 현재 비밀번호 조회
+    with engine.begin() as connection:
+        current_account = connection.execute(
+            text("""
+                SELECT "PASSWORD_HASH"
+                FROM "ACCOUNT"
+                WHERE "ACCOUNT_UNIQN" = :account_id
+                  AND "CLINIC_UNIQN" = :clinic_id
+                  AND "STATUS_CD" = 'ACTIVE'
+                FOR UPDATE
+            """),
+            {
+                "account_id": account["ACCOUNT_UNIQN"],
+                "clinic_id": account["CLINIC_UNIQN"]
+            }
+        ).mappings().first()
+
+        if current_account is None:
+            raise HTTPException(
+                status_code=404,
+                detail="계정 정보를 찾을 수 없습니다."
+            )
+
+        # 4. 현재 비밀번호 검증
+        if not verify_password(
+            request.currentPassword,
+            current_account["PASSWORD_HASH"]
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="현재 비밀번호가 올바르지 않습니다."
+            )
+
+        # 5. 기존 비밀번호와 동일한지 확인
+        if verify_password(
+            request.newPassword,
+            current_account["PASSWORD_HASH"]
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="기존 비밀번호와 다른 비밀번호를 입력해 주세요."
+            )
+
+        # 6. 새 비밀번호 암호화 및 저장
+        new_password_hash = hash_password(request.newPassword)
+
+        connection.execute(
+            text("""
+                UPDATE "ACCOUNT"
+                SET "PASSWORD_HASH" = :password_hash
+                WHERE "ACCOUNT_UNIQN" = :account_id
+                  AND "CLINIC_UNIQN" = :clinic_id
+                  AND "STATUS_CD" = 'ACTIVE'
+            """),
+            {
+                "password_hash": new_password_hash,
+                "account_id": account["ACCOUNT_UNIQN"],
+                "clinic_id": account["CLINIC_UNIQN"]
+            }
+        )
+
+    return {
+        "message": "비밀번호가 변경되었습니다."
+    }
+
 @app.post("/api/auth/logout")
 def logout(response: Response):
     response.delete_cookie(
@@ -2252,4 +2462,142 @@ def logout(response: Response):
 
     return {
         "message": "로그아웃되었습니다."
+    }
+
+@app.get("/api/chat/messages")
+def get_chat_messages(
+    account=Depends(require_authenticated_user)
+):
+    with engine.connect() as connection:
+        rows = connection.execute(
+            text("""
+                SELECT
+                    "MESSAGE_UNIQN",
+                    "SENDER_UNIQN",
+                    "SENDER_NAME_SNAPSHOT",
+                    "SENDER_ROLE_SNAPSHOT",
+                    "MESSAGE_TEXT",
+                    "SENT_AT"
+                FROM "CHAT_MESSAGE"
+                WHERE "CLINIC_UNIQN" = :clinic_id
+                ORDER BY "SENT_AT" DESC, "MESSAGE_UNIQN" DESC
+                LIMIT 100
+            """),
+            {
+                "clinic_id": account["CLINIC_UNIQN"]
+            }
+        ).mappings().all()
+
+    return {
+        "messages": [
+            {
+                "id": row["MESSAGE_UNIQN"],
+                "senderId": row["SENDER_UNIQN"],
+                "senderName": row["SENDER_NAME_SNAPSHOT"],
+                "senderRole": row["SENDER_ROLE_SNAPSHOT"],
+                "message": row["MESSAGE_TEXT"],
+                "sentAt": row["SENT_AT"].isoformat()
+            }
+            for row in reversed(rows)
+        ]
+    }
+
+class ChatMessageCreateRequest(BaseModel):
+    message: str
+
+
+@app.post("/api/chat/messages", status_code=201)
+def create_chat_message(
+    request: ChatMessageCreateRequest,
+    account=Depends(require_authenticated_user)
+):
+    message = request.message.strip()
+
+    if not message:
+        raise HTTPException(
+            status_code=400,
+            detail="메시지를 입력해 주세요."
+        )
+
+    if len(message) > 2000:
+        raise HTTPException(
+            status_code=400,
+            detail="메시지는 2000자 이하로 입력해 주세요."
+        )
+
+    with engine.begin() as connection:
+        sender = connection.execute(
+            text("""
+                SELECT
+                    "NAME",
+                    "ROLE_CD",
+                    "IS_OWNER"
+                FROM "ACCOUNT"
+                WHERE "ACCOUNT_UNIQN" = :account_id
+                  AND "CLINIC_UNIQN" = :clinic_id
+                  AND "STATUS_CD" = 'ACTIVE'
+            """),
+            {
+                "account_id": account["ACCOUNT_UNIQN"],
+                "clinic_id": account["CLINIC_UNIQN"]
+            }
+        ).mappings().first()
+
+        if sender is None:
+            raise HTTPException(
+                status_code=403,
+                detail="채팅을 이용할 수 없는 계정입니다."
+            )
+
+        sender_role = (
+            "원장" if sender["IS_OWNER"]
+            else "한의사" if sender["ROLE_CD"] == "DOCTOR"
+            else "안내데스크"
+        )
+
+        row = connection.execute(
+            text("""
+                INSERT INTO "CHAT_MESSAGE" (
+                    "CLINIC_UNIQN",
+                    "SENDER_UNIQN",
+                    "SENDER_NAME_SNAPSHOT",
+                    "SENDER_ROLE_SNAPSHOT",
+                    "MESSAGE_TEXT",
+                    "SENT_AT"
+                )
+                VALUES (
+                    :clinic_id,
+                    :sender_id,
+                    :sender_name,
+                    :sender_role,
+                    :message,
+                    NOW()
+                )
+                RETURNING
+                    "MESSAGE_UNIQN",
+                    "SENDER_UNIQN",
+                    "SENDER_NAME_SNAPSHOT",
+                    "SENDER_ROLE_SNAPSHOT",
+                    "MESSAGE_TEXT",
+                    "SENT_AT"
+            """),
+            {
+                "clinic_id": account["CLINIC_UNIQN"],
+                "sender_id": account["ACCOUNT_UNIQN"],
+                "sender_name": sender["NAME"],
+                "sender_role": sender_role,
+                "message": message
+            }
+        ).mappings().first()
+
+    return {
+        "message": "메시지가 전송되었습니다.",
+        "chatMessage": {
+            "id": row["MESSAGE_UNIQN"],
+            "senderId": row["SENDER_UNIQN"],
+            "senderName": row["SENDER_NAME_SNAPSHOT"],
+            "senderRole": row["SENDER_ROLE_SNAPSHOT"],
+            "message": row["MESSAGE_TEXT"],
+            "sentAt": row["SENT_AT"].isoformat()
+        }
     }

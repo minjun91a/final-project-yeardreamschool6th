@@ -842,6 +842,33 @@ const deletePrescription = async (record) => {
         setCatalogLoading(false)
       }
     }
+
+const applyCatalogPrescription = () => {
+  if (!catalogDetail) {
+    alert('선택할 처방 정보가 없습니다.')
+    return
+  }
+
+
+  setSelectedPrescription(catalogDetail.name)
+  setHerbs(
+    catalogDetail.herbs?.length
+      ? catalogDetail.herbs.map((herb) => ({
+          name: herb.name,
+          amount: String(herb.amount ?? ''),
+        }))
+      : [{ name: '', amount: '' }]
+  )
+
+
+  setSavedPrescription(false)
+  setShowDirectInput(false)
+  setShowPrescriptionSearch(false)
+  setCatalogDetail(null)
+  setCatalogResults([])
+  setCatalogError('')
+}
+
   return (
     <div>
       <h2>AI 신규 처방전 작성 및 저장</h2>
@@ -869,7 +896,23 @@ const deletePrescription = async (record) => {
 
                   <select
                     value={selectedConsultationId}
-                    onChange={(e) => setSelectedConsultationId(e.target.value)}
+                    onChange={(e) => {
+                      const nextConsultationId = e.target.value
+
+                      if (nextConsultationId !== selectedConsultationId) {
+                        setSelectedConsultationId(nextConsultationId)
+                        setSelectedPrescription(null)
+                        setHerbs([{ name: '', amount: '' }])
+                        setCustomPrescription('')
+                        setShowDirectInput(false)
+                        setShowPrescriptionSearch(false)
+                        setCatalogDetail(null)
+                        setCatalogResults([])
+                        setCatalogError('')
+                        setSavedPrescription(false)
+                      }
+                    }}
+
                     style={{
                       padding: '10px',
                       width: '100%',
@@ -1041,6 +1084,67 @@ const deletePrescription = async (record) => {
                   <p><strong>처방 설명:</strong> {catalogDetail.description || '-'}</p>
                   <p><strong>용법:</strong> {catalogDetail.usage || '-'}</p>
                   <p><strong>주의사항:</strong> {catalogDetail.cautions || '-'}</p>
+
+                    <h4 style={{ marginTop: '20px' }}>약재 구성</h4>
+
+                    {catalogDetail.herbs?.length > 0 ? (
+                      <table
+                        style={{
+                          width: '100%',
+                          borderCollapse: 'collapse',
+                          textAlign: 'center',
+                          marginTop: '10px',
+                        }}
+                      >
+                        <thead>
+                          <tr>
+                            <th style={{ padding: '8px', borderBottom: '1px solid #ccc' }}>
+                              약재명
+                            </th>
+                            <th style={{ padding: '8px', borderBottom: '1px solid #ccc' }}>
+                              규격 및 설명
+                            </th>
+                            <th style={{ padding: '8px', borderBottom: '1px solid #ccc' }}>
+                              용량
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {catalogDetail.herbs.map((herb, index) => (
+                            <tr key={herb.id ?? index}>
+                              <td style={{ padding: '8px', borderBottom: '1px solid #eee' }}>
+                                {herb.name}
+                              </td>
+                              <td style={{ padding: '8px', borderBottom: '1px solid #eee' }}>
+                                {herb.specification || '-'}
+                              </td>
+                              <td style={{ padding: '8px', borderBottom: '1px solid #eee' }}>
+                                {herb.amount ?? '-'} {herb.unit || ''}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    ) : (
+                      <p>등록된 약재 정보가 없습니다.</p>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={applyCatalogPrescription}
+                      disabled={catalogLoading}
+                      style={{
+                        marginTop: '20px',
+                        padding: '10px 18px',
+                        backgroundColor: '#245c46',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      이 처방 선택
+                    </button>
                 </div>
               )}
 

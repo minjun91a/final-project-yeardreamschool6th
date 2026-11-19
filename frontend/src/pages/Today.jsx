@@ -60,15 +60,15 @@ const initialPatients = [
 ]
 
 
-export default function Today() {
+export default function Today({ currentRole, onOpenChat }) {
   const navigate = useNavigate()
   const [patients, setPatients] = useState([])
-  const [role, setRole] = useState('한의사')
+  const role = currentRole === 'desk' ? '안내데스크' : currentRole === 'director' ? '원장' : '한의사'
 
   useEffect(() => {
     const loadWaitingPatients = async () => {
       try {
-        const response = await fetch('http://127.0.0.1:8000/api/waiting', {
+        const response = await fetch('/api/waiting', {
           credentials: 'include',
         })
 
@@ -103,7 +103,7 @@ export default function Today() {
   const startConsultation = async (id) => {
     try {
       const response = await fetch(
-        `http://127.0.0.1:8000/api/waiting/${id}`,
+        `/api/waiting/${id}`,
         {
           method: 'PATCH',
           credentials: 'include',
@@ -139,7 +139,7 @@ export default function Today() {
     if (!window.confirm('상담을 취소하시겠습니까?')) return
 
     try {
-      const response = await fetch(`http://127.0.0.1:8000/api/waiting/${id}`, {
+      const response = await fetch(`/api/waiting/${id}`, {
         method: 'PATCH',
         credentials: 'include',
         headers: {
@@ -173,7 +173,7 @@ export default function Today() {
     if (!window.confirm('접수를 취소하시겠습니까?')) return
 
     try {
-      const response = await fetch(`http://127.0.0.1:8000/api/waiting/${id}`, {
+      const response = await fetch(`/api/waiting/${id}`, {
         method: 'DELETE',
         credentials: 'include',
       })
@@ -202,14 +202,7 @@ export default function Today() {
       <div className="today-heading">
         <h2>오늘의 업무</h2>
 
-        <label>
-          테스트 직무:{' '}
-          <select value={role} onChange={(e) => setRole(e.target.value)}>
-            <option value="원장">원장</option>
-            <option value="한의사">한의사</option>
-            <option value="안내데스크">안내데스크</option>
-          </select>
-        </label>
+
       </div>
 
       <div className="today-summary">
@@ -265,13 +258,13 @@ export default function Today() {
                 <td>{patient.doctor || '-'}</td>
                 <td>
                   <div className="patient-actions">
-                    {patient.status === '대기' && role !== '안내데스크' && (
+                    {patient.status === '대기' && currentRole !== 'desk' && (
                       <button onClick={() => startConsultation(patient.id)}>
                         상담 시작
                       </button>
                     )}
 
-                    {patient.status === '대기' && role === '안내데스크' && (
+                    {patient.status === '대기' && currentRole === 'desk' && (
                       <button
                         className="danger-button"
                         onClick={() => cancelReception(patient.id)}
@@ -281,7 +274,7 @@ export default function Today() {
                     )}
 
                     {patient.status === '진료 중' &&
-                      role !== '안내데스크' && (
+                      currentRole !== 'desk' && (
                         <>
 
                           <button
@@ -346,13 +339,7 @@ export default function Today() {
     <div className="quick-menu-card">
       <h4>업무 채팅</h4>
       <p>직원 간 채팅방을 확인합니다.</p>
-      <button
-        onClick={() =>
-          navigate('/account', {
-            state: { view: 'chat' },
-          })
-        }
-      >
+      <button onClick={onOpenChat}>
         채팅방 보기
       </button>
     </div>
