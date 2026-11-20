@@ -12,8 +12,12 @@ export default function Prescriptions({ currentRole }) {
   const patient = location.state?.patient
   const consultationId = location.state?.consultationId
   const isNewPrescription = location.pathname === '/prescription/new'
+  const aiPrescription = isNewPrescription ? location.state?.aiPrescription : null
 
-  const [selectedPrescription, setSelectedPrescription] = useState(null)
+  const [selectedPrescription, setSelectedPrescription] = useState(aiPrescription?.name ?? null)
+  const [prescriptionSource, setPrescriptionSource] = useState(aiPrescription ? 'ai' : 'manual')
+  const [catalogPrescriptionId, setCatalogPrescriptionId] = useState(null)
+  const [prescriptionText, setPrescriptionText] = useState('')
   const [consultationRecords, setConsultationRecords] = useState([])
   const [patientRecords, setPatientRecords] = useState([])
   const [selectedConsultationId, setSelectedConsultationId] = useState('')
@@ -23,10 +27,12 @@ export default function Prescriptions({ currentRole }) {
   const [showPrescriptionSearch, setShowPrescriptionSearch] = useState(false)
   const [prescriptionSearchQuery, setPrescriptionSearchQuery] = useState('')
   const [catalogResults, setCatalogResults] = useState([])
+  const [catalogType, setCatalogType] = useState('prescription')
   const [catalogDetail, setCatalogDetail] = useState(null)
+  const [catalogOriginal, setCatalogOriginal] = useState(null)
   const [catalogLoading, setCatalogLoading] = useState(false)
   const [catalogError, setCatalogError] = useState('')
-  const [herbs, setHerbs] = useState([
+  const [herbs, setHerbs] = useState(aiPrescription?.ingredients ?? [
   { name: '', amount: '' },
  ])
 
@@ -49,11 +55,13 @@ export default function Prescriptions({ currentRole }) {
   const [isSaving, setIsSaving] = useState(false)
   const [prescriptionRecords, setPrescriptionRecords] = useState([])
   const [detailPrescription, setDetailPrescription] = useState(null)
+  const printRxId = detailPrescription?.rxId
+  const printVersionId = detailPrescription?.versionId
   const [editPrescription, setEditPrescription] = useState(null)
   const [listError, setListError] = useState('')
 
   useEffect(() => {
-      if (!isDesk || !detailPrescription?.id) {
+      if (!isDesk || !printRxId || !printVersionId) {
         setPrintCount(0)
         setPrintHistoryLoading(false)
         return
@@ -67,7 +75,7 @@ export default function Prescriptions({ currentRole }) {
 
         try {
           const response = await fetch(
-            `/api/prescriptions/${detailPrescription.id}/print-history`,
+            `/api/prescriptions/${printRxId}/print-history?versionId=${printVersionId}`,
             {
               credentials: 'include',
             }
@@ -98,7 +106,7 @@ export default function Prescriptions({ currentRole }) {
       return () => {
         cancelled = true
       }
-    }, [isDesk, detailPrescription?.id])
+    }, [isDesk, printRxId, printVersionId])
 
   useEffect(() => {
     if (isNewPrescription) return
@@ -108,7 +116,7 @@ export default function Prescriptions({ currentRole }) {
         setListError('')
 
         const response = await fetch(
-    '/api/prescriptions',
+    isDesk ? '/api/prescription-deliveries' : '/api/prescriptions',
       {
             credentials: 'include',
           }
@@ -119,7 +127,10 @@ export default function Prescriptions({ currentRole }) {
         }
 
         const data = await response.json()
-        setPrescriptionRecords(data.records || [])
+        setPrescriptionRecords((data.records || []).map((record) => ({
+          ...record,
+          status: isDesk || record.lastDeliveredVersionId === record.currentVersionId ? '전송' : '미전송',
+        })))
       } catch (error) {
         console.error('처방전 목록 조회 오류:', error)
         setListError('처방전 목록을 불러오지 못했습니다.')
@@ -127,7 +138,7 @@ export default function Prescriptions({ currentRole }) {
     }
 
   loadPrescriptions()
-}, [isNewPrescription])
+}, [isDesk, isNewPrescription])
 
     useEffect(() => {
   if (!isNewPrescription) return
@@ -191,17 +202,9 @@ export default function Prescriptions({ currentRole }) {
       return
     }
 
-    if (
-      herbs.length === 0 ||
-      herbs.some(
-        (herb) =>
-          !herb.name.trim() ||
-          !herb.amount.trim() ||
-          !Number.isFinite(Number(herb.amount)) ||
-          Number(herb.amount) <= 0
-      )
-    ) {
-      alert('약재명과 올바른 용량을 입력해 주세요.')
+    // v1.3: 직접 입력 약재의 원본 용량·단위는 임의로 생성하지 않는다.
+    if (herbs.some((herb) => !herb.name.trim())) {
+      alert('약재명을 입력해 주세요.')
       return
     }
 
@@ -217,12 +220,21 @@ export default function Prescriptions({ currentRole }) {
               'Content-Type': 'application/json',
             },
           body: JSON.stringify({
-            patientId: prescriptionPatient.id,
-            consultationId: prescriptionConsultationId,
+            caseId: Number(prescriptionConsultationId),
+            diagnosisText: null,
+            prescriptionId: prescriptionSource === 'ai' ? aiPrescription.id :
+              prescriptionSource === 'catalog' ? catalogPrescriptionId : null,
+            prescriptionSearchId: prescriptionSource === 'ai' ? location.state.prescriptionSearchId : null,
             prescriptionName: selectedPrescription.trim(),
-            herbs: herbs.map((herb) => ({
+            prescriptionText: prescriptionText.trim() || null,
+            ingredients: herbs.map((herb) => herb.compositionId != null ? herb : ({
+              compositionId: null,
+              id: herb.id ?? null,
               name: herb.name.trim(),
-              amount: Number(herb.amount),
+              amount: null,
+              unit: null,
+              preparation: null,
+              originalDoseInfo: null,
             })),
           }),
         }
@@ -231,11 +243,7 @@ export default function Prescriptions({ currentRole }) {
       const data = await response.json()
 
       if (!response.ok) {
-        alert(
-          typeof data.detail === 'string'
-            ? data.detail
-            : '처방전 저장에 실패했습니다.'
-        )
+        alert(data.error?.message || '처방전 저장에 실패했습니다.')
         return
       }
 
@@ -251,6 +259,33 @@ export default function Prescriptions({ currentRole }) {
 
 const [isUpdating, setIsUpdating] = useState(false)
 
+const fetchPrescriptionVersion = async (record) => {
+  const path = isDesk
+    ? `/api/prescription-deliveries/${record.id}`
+    : `/api/prescriptions/${record.id}/versions/${record.currentVersionId}`
+  const response = await fetch(path, { credentials: 'include' })
+  const data = await response.json()
+  if (!response.ok) throw new Error(data.error?.message || '저장본을 불러오지 못했습니다.')
+  const version = isDesk ? data.record.version : data.record
+  return { ...record, ...version, id: record.id, herbs: version.ingredients }
+}
+
+const openPrescriptionDetail = async (record) => {
+  try {
+    setDetailPrescription(await fetchPrescriptionVersion(record))
+  } catch (error) {
+    alert(error.message)
+  }
+}
+
+const openPrescriptionCorrection = async (record) => {
+  try {
+    setEditPrescription({ ...await fetchPrescriptionVersion(record), reason: '' })
+  } catch (error) {
+    alert(error.message)
+  }
+}
+
 const updatePrescription = async () => {
   if (!editPrescription || isUpdating) return
 
@@ -260,16 +295,10 @@ const updatePrescription = async () => {
   }
 
   if (
-    editPrescription.herbs.length === 0 ||
-    editPrescription.herbs.some(
-      (herb) =>
-        !herb.name.trim() ||
-        String(herb.amount).trim() === '' ||
-        !Number.isFinite(Number(herb.amount)) ||
-        Number(herb.amount) <= 0
-    )
+    editPrescription.herbs.some((herb) => !herb.name.trim()) ||
+    !editPrescription.reason.trim()
   ) {
-    alert('약재명과 올바른 용량을 입력해 주세요.')
+    alert('약재명과 정정 사유를 입력해 주세요.')
     return
   }
 
@@ -285,12 +314,17 @@ const updatePrescription = async () => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          patientId: editPrescription.patientId,
-          consultationId: editPrescription.consultationId,
+          caseId: editPrescription.caseId,
+          versionId: editPrescription.versionId,
+          reason: editPrescription.reason.trim(),
+          diagnosisText: editPrescription.diagnosisText,
+          prescriptionId: editPrescription.prescriptionId,
+          prescriptionSearchId: editPrescription.prescriptionSearchId,
+          prescriptionText: editPrescription.prescriptionText,
           prescriptionName: editPrescription.prescriptionName.trim(),
-          herbs: editPrescription.herbs.map((herb) => ({
+          ingredients: editPrescription.herbs.map((herb) => herb.compositionId != null || herb.id != null ? herb : ({
             name: herb.name.trim(),
-            amount: Number(herb.amount),
+            id: null, compositionId: null, amount: null, unit: null, preparation: null, originalDoseInfo: null,
           })),
         }),
       }
@@ -300,21 +334,22 @@ const updatePrescription = async () => {
 
     if (!response.ok) {
       alert(
-        typeof data.detail === 'string'
-          ? data.detail
-          : '처방전 수정에 실패했습니다.'
+        data.error?.message || '처방전 수정에 실패했습니다.'
       )
       return
     }
 
     setPrescriptionRecords((prev) =>
       prev.map((record) =>
-        record.id === data.record.id ? data.record : record
+        record.id === data.record.rxId ? {
+          ...record, prescriptionName: data.record.prescriptionName, updatedAt: data.record.savedAt,
+          currentVersionId: data.record.versionId, currentVersionNo: data.record.versionNo, status: '미전송',
+        } : record
       )
     )
 
     setDetailPrescription((prev) =>
-      prev?.id === data.record.id ? data.record : prev
+      prev?.id === data.record.rxId ? { ...prev, ...data.record, herbs: data.record.ingredients } : prev
     )
 
     setEditPrescription(null)
@@ -340,8 +375,10 @@ const sendPrescription = async (record) => {
     const response = await fetch(
   `/api/prescriptions/${record.id}/send`,
   {
-    method: 'POST',
+    method: 'PATCH',
     credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ versionId: record.currentVersionId }),
   }
 )
 
@@ -358,8 +395,8 @@ const sendPrescription = async (record) => {
 
     setPrescriptionRecords((prev) =>
       prev.map((item) =>
-        String(item.id) === String(data.prescriptionId)
-          ? { ...item, status: data.status }
+        item.id === data.record.rxId
+          ? { ...item, status: '전송', lastDeliveredVersionId: data.record.versionId }
           : item
       )
     )
@@ -466,7 +503,7 @@ const deletePrescription = async (record) => {
             <tbody>
               {prescriptionRecords.map((record) => (
                 <tr key={record.id}>
-                  <td>{record.createdAt?.slice(0, 10)}</td>
+                  <td>{(record.sentAt ?? record.createdAt)?.slice(0, 10)}</td>
                   <td>{record.patientName}</td>
                   <td>{record.prescriptionName}</td>
                   <td>{record.status}</td>
@@ -481,19 +518,14 @@ const deletePrescription = async (record) => {
                         >
                     <button
                       type="button"
-                      onClick={() => setDetailPrescription(record)}
+                      onClick={() => openPrescriptionDetail(record)}
                     >
                       보기
                     </button>
-                      {currentRole !== 'desk' && record.status === '미전송' && (
+                      {currentRole !== 'desk' && (
                           <button
                             type="button"
-                            onClick={() =>
-                              setEditPrescription({
-                                ...record,
-                                herbs: record.herbs.map((herb) => ({ ...herb })),
-                              })
-                            }
+                            onClick={() => openPrescriptionCorrection(record)}
                             style={{ marginLeft: '8px' }}
                           >
                             수정
@@ -601,7 +633,7 @@ const deletePrescription = async (record) => {
                           onClick={async () => {
                             try {
                               const response = await fetch(
-                                `/api/prescriptions/${detailPrescription.id}/print`,
+                                `/api/prescriptions/${detailPrescription.rxId}/print?versionId=${detailPrescription.versionId}`,
                                 {
                                   method: 'POST',
                                   credentials: 'include',
@@ -691,6 +723,11 @@ const deletePrescription = async (record) => {
                       }}
                     />
                   </label>
+                  <label>
+                    정정 사유
+                    <input type="text" value={editPrescription.reason}
+                      onChange={(e) => setEditPrescription((prev) => ({ ...prev, reason: e.target.value }))} />
+                  </label>
 
                   <h4>약재 구성</h4>
 
@@ -707,6 +744,7 @@ const deletePrescription = async (record) => {
                         type="text"
                         placeholder="약재명"
                         value={herb.name}
+                        readOnly={herb.id != null || herb.compositionId != null}
                         onChange={(e) =>
                           setEditPrescription((prev) => ({
                             ...prev,
@@ -721,21 +759,10 @@ const deletePrescription = async (record) => {
                       />
 
                       <input
-                        type="number"
-                        placeholder="용량(g)"
-                        min="0"
-                        step="0.1"
-                        value={herb.amount}
-                        onChange={(e) =>
-                          setEditPrescription((prev) => ({
-                            ...prev,
-                            herbs: prev.herbs.map((item, i) =>
-                              i === index
-                                ? { ...item, amount: e.target.value }
-                                : item
-                            ),
-                          }))
-                        }
+                        type="text"
+                        aria-label="원본 용량"
+                        value={[herb.amount, herb.unit].filter(Boolean).join(' ')}
+                        readOnly
                         style={{ flex: 1, minWidth: 0, padding: '10px' }}
                       />
 
@@ -792,10 +819,11 @@ const deletePrescription = async (record) => {
 
       setCatalogResults([])
       setCatalogDetail(null)
+      setCatalogOriginal(null)
       setCatalogError('')
 
       if (!keyword) {
-        setCatalogError('검색할 처방명을 입력해 주세요.')
+        setCatalogError('검색어를 입력해 주세요.')
         return
       }
 
@@ -803,16 +831,14 @@ const deletePrescription = async (record) => {
 
       try {
         const response = await fetch(
-          `/api/prescription-catalog/search?q=${encodeURIComponent(keyword)}`,
+          `/api/catalog/search?type=${catalogType}&query=${encodeURIComponent(keyword)}`,
           { credentials: 'include' }
         )
 
-        if (!response.ok) {
-          throw new Error('처방 검색에 실패했습니다.')
-        }
-
         const data = await response.json()
-        setCatalogResults(data.results || [])
+        if (!response.ok) throw new Error(data.error?.message || '기업 자료 검색에 실패했습니다.')
+        setCatalogResults(data.items)
+        if (!data.total) setCatalogError('검색 결과가 없습니다.')
       } catch (error) {
         setCatalogError(error.message)
       } finally {
@@ -820,22 +846,38 @@ const deletePrescription = async (record) => {
       }
     }
 
-    const loadCatalogDetail = async (prespId) => {
+    const loadCatalogDetail = async (itemId) => {
       setCatalogLoading(true)
       setCatalogError('')
+      setCatalogOriginal(null)
 
       try {
+        const diseaseId = location.state?.selectedDiseaseId
+        const query = catalogType === 'prescription' && diseaseId
+          ? `?selectedDiseaseId=${encodeURIComponent(diseaseId)}` : ''
         const response = await fetch(
-          `/api/prescription-catalog/${prespId}`,
+          `/api/catalog/${catalogType}/${itemId}${query}`,
           { credentials: 'include' }
         )
 
-        if (!response.ok) {
-          throw new Error('처방 상세 조회에 실패했습니다.')
-        }
-
         const data = await response.json()
-        setCatalogDetail(data)
+        if (!response.ok) throw new Error(data.error?.message || '기업 자료 상세 조회에 실패했습니다.')
+        setCatalogDetail(data.record)
+      } catch (error) {
+        setCatalogError(error.message)
+      } finally {
+        setCatalogLoading(false)
+      }
+    }
+
+    const loadCatalogOriginal = async (sourceUrl) => {
+      setCatalogLoading(true)
+      setCatalogError('')
+      try {
+        const response = await fetch(sourceUrl, { credentials: 'include' })
+        const data = await response.json()
+        if (!response.ok) throw new Error(data.error?.message || '원문 조회에 실패했습니다.')
+        setCatalogOriginal(data.record)
       } catch (error) {
         setCatalogError(error.message)
       } finally {
@@ -851,14 +893,10 @@ const applyCatalogPrescription = () => {
 
 
   setSelectedPrescription(catalogDetail.name)
-  setHerbs(
-    catalogDetail.herbs?.length
-      ? catalogDetail.herbs.map((herb) => ({
-          name: herb.name,
-          amount: String(herb.amount ?? ''),
-        }))
-      : [{ name: '', amount: '' }]
-  )
+  setPrescriptionSource('catalog')
+  setCatalogPrescriptionId(catalogDetail.id)
+  setPrescriptionText('')
+  setHerbs(catalogDetail.ingredients)
 
 
   setSavedPrescription(false)
@@ -902,11 +940,15 @@ const applyCatalogPrescription = () => {
                       if (nextConsultationId !== selectedConsultationId) {
                         setSelectedConsultationId(nextConsultationId)
                         setSelectedPrescription(null)
+                        setPrescriptionSource('manual')
+                        setCatalogPrescriptionId(null)
+                        setPrescriptionText('')
                         setHerbs([{ name: '', amount: '' }])
                         setCustomPrescription('')
                         setShowDirectInput(false)
                         setShowPrescriptionSearch(false)
                         setCatalogDetail(null)
+                        setCatalogOriginal(null)
                         setCatalogResults([])
                         setCatalogError('')
                         setSavedPrescription(false)
@@ -968,7 +1010,7 @@ const applyCatalogPrescription = () => {
           type="button"
           onClick={() => setShowPrescriptionSearch(true)}
         >
-          처방 검색
+          기업 자료 검색
         </button>
 
         {showPrescriptionSearch && (
@@ -994,9 +1036,20 @@ const applyCatalogPrescription = () => {
                 overflowY: 'auto',
               }}
             >
-              <h3>처방 검색</h3>
+              <h3>기업 자료 검색</h3>
 
               <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+                <select aria-label="검색 유형" value={catalogType} disabled={catalogLoading} onChange={(event) => {
+                  setCatalogType(event.target.value)
+                  setCatalogResults([])
+                  setCatalogDetail(null)
+                  setCatalogOriginal(null)
+                  setCatalogError('')
+                }}>
+                  <option value="prescription">처방</option>
+                  <option value="herb">약재</option>
+                  <option value="efficacy">효능</option>
+                </select>
                 <input
                   type="text"
                   value={prescriptionSearchQuery}
@@ -1006,7 +1059,7 @@ const applyCatalogPrescription = () => {
                       searchCatalog()
                     }
                   }}
-                  placeholder="검색할 처방명을 입력해 주세요."
+                  placeholder="검색어를 입력해 주세요."
                   style={{
                     flex: 1,
                     padding: '10px',
@@ -1031,7 +1084,7 @@ const applyCatalogPrescription = () => {
 
               {!catalogLoading && catalogResults.length > 0 && (
                 <div style={{ marginBottom: '20px' }}>
-                  <h4>검색 결과 ({catalogResults.length}건, 최대 50건)</h4>
+                  <h4>검색 결과 ({catalogResults.length}건)</h4>
 
                   <div
                     style={{
@@ -1057,6 +1110,7 @@ const applyCatalogPrescription = () => {
 
                         <button
                           type="button"
+                          disabled={catalogLoading}
                           onClick={() => loadCatalogDetail(item.id)}
                         >
                           상세보기
@@ -1077,17 +1131,35 @@ const applyCatalogPrescription = () => {
                     marginBottom: '16px',
                   }}
                 >
-                  <h4>처방 상세 정보</h4>
-
-                  <p><strong>처방명:</strong> {catalogDetail.name}</p>
-                  <p><strong>원본 분류:</strong> {catalogDetail.originalCode}</p>
-                  <p><strong>처방 설명:</strong> {catalogDetail.description || '-'}</p>
-                  <p><strong>용법:</strong> {catalogDetail.usage || '-'}</p>
-                  <p><strong>주의사항:</strong> {catalogDetail.cautions || '-'}</p>
-
+                  <h4>{catalogDetail.name}</h4>
+                  {typeof catalogDetail.connectedToSelectedDisease === 'boolean' && (
+                    <p>{catalogDetail.connectedToSelectedDisease ? '선택한 병증과 기업 원본에 연결됨' : '선택한 병증과 등록된 연결 없음'}</p>
+                  )}
+                  {catalogDetail.description && <p style={{ whiteSpace: 'pre-wrap' }}>{catalogDetail.description}</p>}
+                  {catalogDetail.usageText && <p style={{ whiteSpace: 'pre-wrap' }}>용법 · {catalogDetail.usageText}</p>}
+                  {catalogDetail.registeredCautionTexts.map((value) => <p key={value}>주의사항 · {value}</p>)}
+                  {catalogDetail.messages.map((message) => <p key={message}>{message}</p>)}
+                  {catalogDetail.evidence.map((source) => (
+                    <p key={source.sourceId}>
+                      {source.sourceLocation}{' '}
+                      <button type="button" disabled={catalogLoading} onClick={() => loadCatalogOriginal(source.sourceUrl)}>
+                        원문 보기
+                      </button>
+                    </p>
+                  ))}
+                  {catalogOriginal && <p style={{ whiteSpace: 'pre-wrap' }}>{catalogOriginal.originalText}</p>}
+                  {Object.entries({ diseases: '관련 병증', prescriptions: '연결 처방', herbs: '연결 약재', efficacies: '연결 효능' })
+                    .filter(([key]) => catalogDetail.relations[key].length > 0)
+                    .map(([key, label]) => (
+                      <details key={key}>
+                        <summary>{label} ({catalogDetail.relations[key].length}건)</summary>
+                        <ul>{catalogDetail.relations[key].map((item) => <li key={item.id}>{item.name}</li>)}</ul>
+                      </details>
+                    ))}
+                  {catalogDetail.type === 'prescription' && <>
                     <h4 style={{ marginTop: '20px' }}>약재 구성</h4>
 
-                    {catalogDetail.herbs?.length > 0 ? (
+                    {catalogDetail.ingredients.length > 0 ? (
                       <table
                         style={{
                           width: '100%',
@@ -1110,13 +1182,13 @@ const applyCatalogPrescription = () => {
                           </tr>
                         </thead>
                         <tbody>
-                          {catalogDetail.herbs.map((herb, index) => (
-                            <tr key={herb.id ?? index}>
+                          {catalogDetail.ingredients.map((herb) => (
+                            <tr key={herb.compositionId}>
                               <td style={{ padding: '8px', borderBottom: '1px solid #eee' }}>
                                 {herb.name}
                               </td>
                               <td style={{ padding: '8px', borderBottom: '1px solid #eee' }}>
-                                {herb.specification || '-'}
+                                {herb.preparation || '-'}
                               </td>
                               <td style={{ padding: '8px', borderBottom: '1px solid #eee' }}>
                                 {herb.amount ?? '-'} {herb.unit || ''}
@@ -1145,6 +1217,14 @@ const applyCatalogPrescription = () => {
                     >
                       이 처방 선택
                     </button>
+                  </>}
+                  {catalogDetail.type === 'herb' && selectedPrescription && (
+                    <button type="button" onClick={() => {
+                      const { id, name } = catalogDetail
+                      setHerbs((current) => [...current.filter((herb) => herb.name.trim()), { id, name, amount: null }])
+                      setShowPrescriptionSearch(false)
+                    }}>이 약재 추가</button>
+                  )}
                 </div>
               )}
 
@@ -1153,6 +1233,7 @@ const applyCatalogPrescription = () => {
                 onClick={() => {
                   setShowPrescriptionSearch(false)
                   setCatalogDetail(null)
+                  setCatalogOriginal(null)
                   setCatalogResults([])
                   setCatalogError('')
                 }}
@@ -1192,6 +1273,11 @@ const applyCatalogPrescription = () => {
               }
 
               setSelectedPrescription(customPrescription.trim())
+              if (prescriptionSource !== 'manual') {
+                setHerbs([{ name: '', amount: '' }])
+                setPrescriptionText('')
+              }
+              setPrescriptionSource('manual')
               setShowDirectInput(false)
             }}
           >
@@ -1199,11 +1285,18 @@ const applyCatalogPrescription = () => {
           </button>
         </div>
       )}
-        {selectedPrescription && (
+        {selectedPrescription !== null && (
           <div style={{ marginTop: '24px', maxWidth: '700px' }}>
             <h3>처방 구성 입력</h3>
 
-            <p>처방명: {selectedPrescription}</p>
+            <label>
+              최종 처방명
+              <input value={selectedPrescription} onChange={(event) => setSelectedPrescription(event.target.value)} />
+            </label>
+            <label>
+              처방 내용
+              <textarea value={prescriptionText} onChange={(event) => setPrescriptionText(event.target.value)} />
+            </label>
 
             {herbs.map((herb, index) => (
               <div
@@ -1219,6 +1312,7 @@ const applyCatalogPrescription = () => {
                   type="text"
                   placeholder="약재명"
                   value={herb.name}
+                  readOnly={herb.id != null || herb.compositionId != null}
                   onChange={(e) =>
                     updateHerb(index, 'name', e.target.value)
                   }
@@ -1226,14 +1320,10 @@ const applyCatalogPrescription = () => {
                 />
 
                 <input
-                  type="number"
-                  placeholder="용량(g)"
-                  min="0"
-                  step="0.1"
-                  value={herb.amount}
-                  onChange={(e) =>
-                    updateHerb(index, 'amount', e.target.value)
-                  }
+                  type="text"
+                  aria-label="원본 용량"
+                  value={[herb.amount, herb.unit].filter(Boolean).join(' ')}
+                  readOnly
                   style={{ flex: 1, padding: '10px', minWidth: 0 }}
                 />
 

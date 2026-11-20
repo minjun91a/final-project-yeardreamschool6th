@@ -99,7 +99,7 @@ export default function App() {
       .catch(() => { if (active) setServerStatus('연결 실패') })
     fetch('/api/auth/me', { credentials: 'include' })
       .then(r => { if (!r.ok) throw new Error(); return r.json() })
-      .then(data => { if (active) setAccount(data) })
+      .then(data => { if (active) setAccount(data.account) })
       .catch(() => { if (active) setAccount(null) })
       .finally(() => { if (active) setAuthLoading(false) })
     return () => { active = false }

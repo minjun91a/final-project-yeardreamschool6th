@@ -23,7 +23,7 @@ export default function ChatWidget({ onClose }) {
           }
 
           const data = await response.json()
-          setMyAccountId(data.id)
+          setMyAccountId(data.account.id)
         } catch (err) {
           setError(err.message)
         }

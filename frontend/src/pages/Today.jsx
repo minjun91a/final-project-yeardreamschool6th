@@ -4,196 +4,62 @@ import { useNavigate } from 'react-router-dom'
 import './Today.css'
 
 
-const initialPatients = [
-  {
-    id: 1,
-    name: '김민수',
-    birthDate: '1990-03-15',
-    phone: '010-1234-5678',
-    address: '서울특별시 강남구',
-    guardianName: '',
-    guardianRelation: '',
-    guardianPhone: '',
-    time: '09:10',
-    status: '대기',
-    doctor: null,
-  },
-  {
-    id: 2,
-    name: '이서연',
-    birthDate: '1985-07-22',
-    phone: '010-2345-6789',
-    address: '서울특별시 송파구',
-    guardianName: '',
-    guardianRelation: '',
-    guardianPhone: '',
-    time: '09:25',
-    status: '대기',
-    doctor: null,
-  },
-  {
-    id: 3,
-    name: '박지훈',
-    birthDate: '1978-11-08',
-    phone: '010-3456-7890',
-    address: '서울특별시 마포구',
-    guardianName: '',
-    guardianRelation: '',
-    guardianPhone: '',
-    time: '09:40',
-    status: '진료 중',
-    doctor: '담당 한의사',
-  },
-  {
-    id: 4,
-    name: '최유진',
-    birthDate: '1995-05-19',
-    phone: '010-4567-8901',
-    address: '서울특별시 서초구',
-    guardianName: '',
-    guardianRelation: '',
-    guardianPhone: '',
-    time: '10:00',
-    status: '완료',
-    doctor: null,
-  },
-]
-
+const statusLabels = {
+  REGISTERED: '접수', WAITING: '대기', IN_PROGRESS: '진료 중',
+  COMPLETED: '완료', CANCELLED: '접수 취소', INTERRUPTED: '중단',
+}
 
 export default function Today({ currentRole, onOpenChat }) {
   const navigate = useNavigate()
   const [patients, setPatients] = useState([])
   const role = currentRole === 'desk' ? '안내데스크' : currentRole === 'director' ? '원장' : '한의사'
 
-  useEffect(() => {
-    const loadWaitingPatients = async () => {
-      try {
-        const response = await fetch('/api/waiting', {
-          credentials: 'include',
-        })
-
-        if (!response.ok) {
-          throw new Error('대기 목록 조회 실패')
-        }
-
-        const data = await response.json()
-
-        setPatients(
-          data.patients.map((patient) => ({
-            ...patient,
-            time: patient.time || '-',
-            status: patient.status || '대기',
-            doctor: patient.doctor || null,
-          }))
-        )
-      } catch (error) {
-        console.error('대기 목록 불러오기 오류:', error)
-      }
-    }
-
-    loadWaitingPatients()
-  }, [])
-
-
-  const waiting = patients.filter((p) => p.status === '대기').length
-  const consulting = patients.filter((p) => p.status === '진료 중').length
-  const completed = patients.filter((p) => p.status === '완료').length
-
-
-  const startConsultation = async (id) => {
+  const loadVisits = async () => {
     try {
-      const response = await fetch(
-        `/api/waiting/${id}`,
-        {
-          method: 'PATCH',
-          credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            status: '진료 중',
-            doctor: '담당 한의사',
-          }),
-        }
-      )
-
+      const response = await fetch('/api/visits?scope=all', { credentials: 'include' })
       const data = await response.json()
-
-      if (!response.ok) {
-        alert(data.detail || '상담 시작에 실패했습니다.')
-        return
-      }
-
-    setPatients((prev) =>
-      prev.map((p) =>
-        p.id === id ? { ...p, ...data.patient } : p
-      )
-    )
-  } catch (error) {
-    console.error('상담 시작 오류:', error)
-    alert('서버 연결에 실패했습니다.')
-  }
-}
-
-  const cancelConsultation = async (id) => {
-    if (!window.confirm('상담을 취소하시겠습니까?')) return
-
-    try {
-      const response = await fetch(`/api/waiting/${id}`, {
-        method: 'PATCH',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          status: '대기',
-          doctor: null,
-        }),
-      })
-
-      const data = await response.json()
-
-      if (!response.ok) {
-        alert(data.detail || '상담 취소에 실패했습니다.')
-        return
-      }
-
-      setPatients((prev) =>
-        prev.map((p) =>
-          p.id === id ? { ...p, ...data.patient } : p
-        )
-      )
+      if (!response.ok) throw new Error(data.error?.message || '접수 현황을 불러오지 못했습니다.')
+      setPatients(data.records || [])
     } catch (error) {
-      console.error('상담 취소 오류:', error)
-      alert('서버 연결에 실패했습니다.')
+      console.error('접수 현황 조회 오류:', error)
+      alert(error.message)
     }
   }
 
-  const cancelReception = async (id) => {
-    if (!window.confirm('접수를 취소하시겠습니까?')) return
+  useEffect(() => { loadVisits() }, [])
 
+  const waiting = patients.filter(p => p.status === 'WAITING').length
+  const consulting = patients.filter(p => p.status === 'IN_PROGRESS').length
+  const completed = patients.filter(p => p.status === 'COMPLETED').length
+
+  const changeVisitStatus = async (visitId, action, reason = null) => {
     try {
-      const response = await fetch(`/api/waiting/${id}`, {
-        method: 'DELETE',
-        credentials: 'include',
+      const response = await fetch(`/api/visits/${visitId}/status`, {
+        method: 'PATCH', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, reason, consultation: null }),
       })
-
       const data = await response.json()
-
-      if (!response.ok) {
-        alert(data.detail || '접수 취소에 실패했습니다.')
-        return
-      }
-
-      setPatients((prev) =>
-        prev.filter((p) => p.id !== id)
-      )
-
-      alert('접수가 취소되었습니다.')
+      if (!response.ok) throw new Error(data.error?.message || '상태 변경에 실패했습니다.')
+      await loadVisits()
     } catch (error) {
-      console.error('접수 취소 오류:', error)
-      alert('서버 연결에 실패했습니다.')
+      console.error('방문 상태 변경 오류:', error)
+      alert(error.message)
     }
+  }
+
+  const startConsultation = id => changeVisitStatus(id, 'START')
+  const cancelConsultation = id => {
+    const reason = window.prompt('상담 시작 오처리 정정 사유를 입력하세요. 실제 상담 내용이 저장된 경우에는 정정할 수 없습니다.')
+    if (reason?.trim()) changeVisitStatus(id, 'CORRECT_START', reason.trim())
+  }
+  const cancelReception = id => {
+    const reason = window.prompt('접수 취소 사유를 입력하세요.')
+    if (reason?.trim()) changeVisitStatus(id, 'CANCEL', reason.trim())
+  }
+  const resumeConsultation = id => {
+    const reason = window.prompt('진료 재개 사유를 입력해 주세요.')
+    if (reason?.trim()) changeVisitStatus(id, 'RESUME', reason.trim())
   }
 
 
@@ -239,32 +105,40 @@ export default function Today({ currentRole, onOpenChat }) {
           </thead>
           <tbody>
             {patients
-              .filter((patient) => patient.status !== '완료')
+              .filter((patient) => !['COMPLETED', 'CANCELLED'].includes(patient.status))
               .map((patient) => (
               <tr key={patient.id}>
-                <td>{patient.time}</td>
-                <td>{patient.name}</td>
+                <td>{patient.registeredAt ? new Date(patient.registeredAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
+                <td>{patient.patientName}</td>
                 <td>
                   <span className={
-                    patient.status === '대기'
+                    patient.status === 'WAITING'
                       ? 'status waiting'
-                      : patient.status === '진료 중'
+                      : patient.status === 'IN_PROGRESS'
                         ? 'status consulting'
                         : 'status completed'
                   }>
-                    {patient.status}
+                    {statusLabels[patient.status] || patient.status}
                   </span>
                 </td>
-                <td>{patient.doctor || '-'}</td>
+                <td>{patient.doctorName || '-'}</td>
                 <td>
                   <div className="patient-actions">
-                    {patient.status === '대기' && currentRole !== 'desk' && (
+                    {patient.status === 'WAITING' && currentRole !== 'desk' && (
                       <button onClick={() => startConsultation(patient.id)}>
                         상담 시작
                       </button>
                     )}
 
-                    {patient.status === '대기' && currentRole === 'desk' && (
+                    {patient.status === 'REGISTERED' && currentRole === 'desk' && (
+                      <button onClick={() => changeVisitStatus(patient.id, 'REGISTER_WAITING')}>대기 등록</button>
+                    )}
+
+                    {patient.status === 'INTERRUPTED' && currentRole !== 'desk' && (
+                      <button onClick={() => resumeConsultation(patient.id)}>진료 재개</button>
+                    )}
+
+                    {['REGISTERED', 'WAITING'].includes(patient.status) && currentRole === 'desk' && (
                       <button
                         className="danger-button"
                         onClick={() => cancelReception(patient.id)}
@@ -273,7 +147,7 @@ export default function Today({ currentRole, onOpenChat }) {
                       </button>
                     )}
 
-                    {patient.status === '진료 중' &&
+                    {patient.status === 'IN_PROGRESS' &&
                       currentRole !== 'desk' && (
                         <>
 
@@ -281,7 +155,7 @@ export default function Today({ currentRole, onOpenChat }) {
                             onClick={() =>
                               navigate('/consultation', {
                                 state: {
-                                  patient: { ...patient },
+                                  patient: { ...patient, visitId: patient.id, id: patient.patientId, name: patient.patientName },
                                   source: 'today',
                                 },
                               })
