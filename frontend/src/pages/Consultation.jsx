@@ -120,6 +120,9 @@ export default function Consultation() {
   const [showAllPrescriptions, setShowAllPrescriptions] = useState(false)
   const [manualDiseaseText, setManualDiseaseText] = useState(null)
   const requestSequence = useRef(0)
+  const analysisTimer = useRef(null)
+  const [diseasePollRevision, setDiseasePollRevision] = useState(0)
+  const diseasePollRequest = useRef(0)
   const activeSearchIdRef = useRef(null)
 
   // v1.3 §8.3: 입력 변경·이탈 시 이전 검색의 설명 작업을 중단 요청한다.
@@ -190,8 +193,11 @@ export default function Consultation() {
       })
       const data = await response.json()
       if (!response.ok) throw new Error(data.error?.message || '추가 처방 설명 요청에 실패했습니다.')
-      if (data.acceptedCandidateIds.length) setPrescriptionSearch((previous) => previous?.result?.searchId === searchId
-        ? { ...previous, result: { ...previous.result, hasPendingExplanations: true } } : previous)
+      if (data.acceptedCandidateIds.length || data.existingCandidateIds.length) {
+        setPrescriptionSearch((previous) => previous?.result?.searchId === searchId
+          ? { ...previous, explanationError: '', pollRevision: (previous.pollRevision ?? 0) + 1,
+              result: { ...previous.result, hasPendingExplanations: true } } : previous)
+      }
     } catch (error) {
       setPrescriptionSearch((previous) => previous?.result?.searchId === searchId
         ? { ...previous, explanationError: error.message } : previous)
@@ -200,6 +206,7 @@ export default function Consultation() {
 
   useEffect(() => {
     const searchId = prescriptionResult?.searchId
+    const revision = currentPrescriptionSearch?.pollRevision
     if (!searchId || !prescriptionResult.hasPendingExplanations) return
     let disposed = false
     let timer
@@ -207,20 +214,22 @@ export default function Consultation() {
       try {
         const response = await fetch(`/api/ai/searches/${encodeURIComponent(searchId)}`, { credentials: 'include' })
         const result = await response.json()
+        if (response.status === 401) throw new Error('로그인 세션을 확인할 수 없습니다. 입력 내용을 확인한 뒤 다시 로그인하고 AI 병증 분석을 실행해 주세요.')
         if (!response.ok || result.kind !== 'PRESCRIPTION' || result.searchId !== searchId) {
           throw new Error(result.error?.message || '처방 설명 진행 상태를 조회하지 못했습니다.')
         }
         if (disposed) return
-        setPrescriptionSearch((previous) => previous?.result?.searchId === searchId ? { ...previous, result } : previous)
+        setPrescriptionSearch((previous) => previous?.result?.searchId === searchId && previous.pollRevision === revision
+          ? { ...previous, result } : previous)
         if (result.hasPendingExplanations) timer = setTimeout(poll, 2000)
       } catch (error) {
-        if (!disposed) setPrescriptionSearch((previous) => previous?.result?.searchId === searchId
+        if (!disposed) setPrescriptionSearch((previous) => previous?.result?.searchId === searchId && previous.pollRevision === revision
           ? { ...previous, explanationError: error.message } : previous)
       }
     }
     timer = setTimeout(poll, 2000)
     return () => { disposed = true; clearTimeout(timer) }
-  }, [prescriptionResult?.searchId, prescriptionResult?.hasPendingExplanations])
+  }, [prescriptionResult?.searchId, prescriptionResult?.hasPendingExplanations, currentPrescriptionSearch?.pollRevision])
 
 
   const [evidenceCandidate, setEvidenceCandidate] = useState(null)
@@ -285,6 +294,7 @@ export default function Consultation() {
   }
 
   const analyzeSymptoms = async () => {
+    clearTimeout(analysisTimer.current)
     const caseId = activeCaseId
     if (!caseId) {
       setAnalysisError('진료 중인 상담 ID가 필요합니다. 오늘의 업무에서 상담을 시작해 주세요.')
@@ -297,6 +307,9 @@ export default function Consultation() {
       activeSearchIdRef.current = null
     }
     setIsAnalyzing(true)
+    ++sourceSequence.current
+    setEvidenceCandidate(null)
+    setSourceDetail(null)
     setAnalysisError('')
     setAnalysisMessage('')
     setAiCandidates([])
@@ -360,6 +373,7 @@ export default function Consultation() {
     if (!draftReady || !symptoms.trim() || !activeCaseId ||
         (restoredInput.current?.caseId === activeCaseId && restoredInput.current.symptoms === symptoms)) return
     const timer = setTimeout(() => analyzeSymptoms(), 800)
+    analysisTimer.current = timer
     return () => clearTimeout(timer)
   }, [symptoms, activeCaseId, draftReady])
 
@@ -382,7 +396,10 @@ export default function Consultation() {
       })
       const data = await response.json()
       if (!response.ok) throw new Error(data.error?.message || '추가 병증 근거 요청에 실패했습니다.')
-      if (activeSearchIdRef.current === searchId && data.acceptedCandidateIds.length) setHasPendingExplanations(true)
+      if (activeSearchIdRef.current === searchId && (data.acceptedCandidateIds.length || data.existingCandidateIds.length)) {
+        setHasPendingExplanations(true)
+        setDiseasePollRevision(++diseasePollRequest.current)
+      }
     } catch (error) {
       if (activeSearchIdRef.current === searchId) setAnalysisError(error.message)
     }
@@ -399,9 +416,10 @@ export default function Consultation() {
         const response = await fetch(`/api/ai/searches/${encodeURIComponent(diseaseSearchId)}`, {
           credentials: 'include',
         })
+        if (response.status === 401) throw new Error('로그인 세션을 확인할 수 없습니다. 입력 내용을 확인한 뒤 다시 로그인하고 AI 병증 분석을 실행해 주세요.')
         if (!response.ok) throw new Error('병증 근거 진행 상태를 조회하지 못했습니다.')
         const data = await response.json()
-        if (disposed || activeSearchIdRef.current !== diseaseSearchId) return
+        if (disposed || activeSearchIdRef.current !== diseaseSearchId || diseasePollRevision !== diseasePollRequest.current) return
         if (data.kind !== 'DISEASE' || data.searchId !== diseaseSearchId) {
           throw new Error('현재 병증 검색과 다른 응답입니다.')
         }
@@ -411,7 +429,7 @@ export default function Consultation() {
         setHasPendingExplanations(data.hasPendingExplanations === true)
         if (data.hasPendingExplanations === true) timer = setTimeout(poll, 2000)
       } catch (error) {
-        if (!disposed) {
+        if (!disposed && activeSearchIdRef.current === diseaseSearchId && diseasePollRevision === diseasePollRequest.current) {
           setHasPendingExplanations(false)
           setAnalysisError(error.message)
         }
@@ -419,7 +437,7 @@ export default function Consultation() {
     }
     timer = setTimeout(poll, 2000)
     return () => { disposed = true; clearTimeout(timer) }
-  }, [diseaseSearchId, hasPendingExplanations])
+  }, [diseaseSearchId, hasPendingExplanations, diseasePollRevision])
 
   const writeConsultation = async (mode = 'save') => {
     if (isWritingConsultation) return
@@ -639,7 +657,7 @@ export default function Consultation() {
                               {savedConsultation && (
                                 <button type="button" onClick={() => navigate('/prescription/new', {
                                   state: { patient, consultationId: savedConsultationId,
-                                    aiPrescription: candidate, prescriptionSearchId: prescriptionResult.searchId,
+                                    aiPrescription: candidate, prescriptionResult,
                                     selectedDiseaseId },
                                 })}>이 처방으로 작성</button>
                               )}
@@ -772,6 +790,7 @@ export default function Consultation() {
                               state: {
                                 patient,
                                 consultationId: savedConsultationId,
+                                prescriptionResult,
                                 selectedDiseaseId,
                               },
                             })
@@ -815,7 +834,20 @@ export default function Consultation() {
 
                       <p>병증명: {evidenceCandidate.name}</p>
 
-                      <h4>근거 내용</h4>
+                      <h4>검색 순위 근거</h4>
+                      {evidenceCandidate.rankingBasis ? (
+                        <>
+                          <p>키워드 검색과 의미 유사도 검색의 순위를 종합한 결과, 전체 후보 중 {evidenceCandidate.rank}위입니다.</p>
+                          <ul>
+                            <li>키워드 검색 · {evidenceCandidate.rankingBasis.keywordRank == null
+                              ? '키워드 검색 결과에 포함되지 않음' : `${evidenceCandidate.rankingBasis.keywordRank}위`}</li>
+                            <li>의미 유사도 검색 · {evidenceCandidate.rankingBasis.semanticRank == null
+                              ? '의미 유사도 검색 결과에 포함되지 않음' : `${evidenceCandidate.rankingBasis.semanticRank}위`}</li>
+                          </ul>
+                        </>
+                      ) : <p>이 검색의 세부 순위 근거를 확인할 수 없습니다.</p>}
+
+                      <h4>입력 증상과 원문의 관련 내용</h4>
                       {evidenceCandidate.explanation?.message && <p>{evidenceCandidate.explanation.message}</p>}
                       {evidenceCandidate.explanation?.status === 'READY' && (
                         <>
@@ -828,6 +860,8 @@ export default function Consultation() {
                             <p>설명되지 않은 증상 · {evidenceCandidate.explanation.unexplainedSymptoms.join(', ')}</p>}
                         </>
                       )}
+                      <h4>후보 원문</h4>
+                      {!evidenceCandidate.evidence?.length && <p>표시할 원문 발췌가 없습니다.</p>}
                       {(evidenceCandidate.evidence ?? []).map((source) => (
                         <section key={source.sourceId}>
                           <p>{source.sourceTitle} · {source.sourceLocation}</p>

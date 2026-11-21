@@ -16,6 +16,7 @@ class E5Embedder:
         model_path = snapshot_download(
             repo_id=MODEL_ID,
             revision=MODEL_REVISION,
+            allow_patterns=["*.json", "model.safetensors", "sentencepiece.bpe.model"],
             local_files_only=True,
         )
 

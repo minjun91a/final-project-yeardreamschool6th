@@ -9,13 +9,6 @@ from fastapi import Depends
 from fastapi import Request
 from itsdangerous import BadSignature, SignatureExpired
 import os
-from pathlib import Path
-from dotenv import load_dotenv
-from pathlib import Path
-from dotenv import load_dotenv
-
-load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
-
 from itsdangerous import URLSafeTimedSerializer
 from fastapi import Response
 from auth import verify_password, hash_password
@@ -34,8 +27,6 @@ from database import engine
 from catalog import create_catalog_router
 from ai.service import create_ai_router, mark_prescription_selected, validate_prescription_source
 
-
-load_dotenv(Path(__file__).resolve().parent / ".env")
 
 app = FastAPI(title="한의결 API")
 SESSION_TTL_SECONDS = int(os.environ["SESSION_TTL_SECONDS"])

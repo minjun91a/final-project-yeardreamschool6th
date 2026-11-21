@@ -1,66 +1,49 @@
 
 import { useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
-const testPatients = [
-  {
-    id: 1,
-    name: '김민수',
-    birthDate: '1990-03-15',
-    phone: '010-1234-5678',
-    address: '서울특별시 마포구',
-  },
-  {
-    id: 2,
-    name: '이서연',
-    birthDate: '1985-07-22',
-    phone: '010-2345-6789',
-    address: '서울특별시 강남구',
-  },
-  {
-    id: 3,
-    name: '박지훈',
-    birthDate: '1978-11-08',
-    phone: '010-3456-7890',
-    address: '경기도 고양시',
-  },
-]
-
 export default function Patients({ currentRole }) {
-  const location = useLocation()
+  const { key, state } = useLocation()
+
+  return <PatientManagement key={key} currentRole={currentRole} navigationState={state} />
+}
+
+function PatientManagement({ currentRole, navigationState }) {
   const [selectedMenu, setSelectedMenu] = useState(
-    location.state?.view === 'history' ? 'history' : 'search'
+    navigationState?.view === 'history' ? 'history' : null
   )
   const [searchKeyword, setSearchKeyword] = useState('')
   const [patients, setPatients] = useState([])
+  const [patientLoadError, setPatientLoadError] = useState('')
   const [editPatient, setEditPatient] = useState(null)
   const [detailPatient, setDetailPatient] = useState(null)
 
 useEffect(() => {
+  let active = true
   const loadPatients = async () => {
     try {
       const response = await fetch('/api/patients', {
         credentials: 'include',
       })
 
-      if (!response.ok) {
-        throw new Error('환자 목록 조회 실패')
-      }
-
       const data = await response.json()
-      setPatients(data.patients || [])
+      if (!response.ok) {
+        throw new Error(data.error?.message || '환자 목록을 불러오지 못했습니다.')
+      }
+      if (active) setPatients(data.patients || [])
     } catch (error) {
-      console.error('환자 목록 조회 오류:', error)
+      if (active) setPatientLoadError(error.message)
     }
   }
 
   loadPatients()
+  return () => { active = false }
 }, [])
 
 
   const [consultationRecords, setConsultationRecords] = useState([])
   const [prescriptionRecords, setPrescriptionRecords] = useState([])
   const [historyDate, setHistoryDate] = useState(
-    location.state?.date || new Date().toLocaleDateString('en-CA')
+    () => navigationState?.date || new Date().toLocaleDateString('en-CA')
   )
   const [selectedRecord, setSelectedRecord] = useState(null)
   const [selectedPrescription, setSelectedPrescription] = useState(null)
@@ -393,6 +376,7 @@ const validatePatient = async (registerWaiting = false) => {
           {selectedMenu === 'search' && (
             <div>
               <h3>환자 검색 및 정보 조회·수정</h3>
+              {patientLoadError && <p role="alert">{patientLoadError}</p>}
 
               <div style={{ marginBottom: '20px' }}>
                 <input

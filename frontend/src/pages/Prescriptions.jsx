@@ -6,6 +6,7 @@ export default function Prescriptions({ currentRole }) {
   const isDesk = currentRole === 'desk'
   const [printCount, setPrintCount] = useState(0)
   const [printHistoryLoading, setPrintHistoryLoading] = useState(false)
+  const [isPrinting, setIsPrinting] = useState(false)
   const location = useLocation()
   const navigate = useNavigate()
 
@@ -13,6 +14,13 @@ export default function Prescriptions({ currentRole }) {
   const consultationId = location.state?.consultationId
   const isNewPrescription = location.pathname === '/prescription/new'
   const aiPrescription = isNewPrescription ? location.state?.aiPrescription : null
+  const navigationResult = location.state?.prescriptionResult
+  const [selectedAiPrescription, setSelectedAiPrescription] = useState(() => aiPrescription ? {
+    id: aiPrescription.id,
+    searchId: navigationResult?.searchId || location.state.prescriptionSearchId,
+  } : null)
+  const [savedRecommendation, setSavedRecommendation] = useState(null)
+  const [showAllRecommendations, setShowAllRecommendations] = useState(false)
 
   const [selectedPrescription, setSelectedPrescription] = useState(aiPrescription?.name ?? null)
   const [prescriptionSource, setPrescriptionSource] = useState(aiPrescription ? 'ai' : 'manual')
@@ -21,6 +29,12 @@ export default function Prescriptions({ currentRole }) {
   const [consultationRecords, setConsultationRecords] = useState([])
   const [patientRecords, setPatientRecords] = useState([])
   const [selectedConsultationId, setSelectedConsultationId] = useState('')
+  const activeConsultationId = consultationId || selectedConsultationId
+  const passedRecommendation = navigationResult && String(navigationResult.caseId) === String(activeConsultationId)
+    ? navigationResult : null
+  const currentRecommendation = savedRecommendation?.caseId === activeConsultationId ? savedRecommendation : null
+  const recommendation = passedRecommendation || currentRecommendation?.result
+  const recommendedCandidates = recommendation?.candidates ?? []
   const [consultationLoadError, setConsultationLoadError] = useState('')
   const [customPrescription, setCustomPrescription] = useState('')
   const [showDirectInput, setShowDirectInput] = useState(false)
@@ -178,6 +192,46 @@ export default function Prescriptions({ currentRole }) {
 
   const [savedPrescription, setSavedPrescription] = useState(false)
 
+  useEffect(() => {
+    if (!isNewPrescription || !activeConsultationId || passedRecommendation) return
+    const controller = new AbortController()
+    const read = async (path) => {
+      const response = await fetch(path, { credentials: 'include', signal: controller.signal })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error?.message || '저장된 처방 후보를 불러오지 못했습니다.')
+      return data
+    }
+    const path = `/api/consultations/${encodeURIComponent(activeConsultationId)}`
+    const loadRecommendation = async () => {
+      try {
+        const { record } = await read(path)
+        const diagnosis = record.diagnosis
+        let result = null
+        if (diagnosis?.diseaseSearchId && diagnosis.selectedDiseaseId != null) {
+          const { records } = await read(`${path}/searches`)
+          const linked = records.findLast((item) => item.kind === 'PRESCRIPTION' && item.status === 'COMPLETED'
+            && item.diseaseSearchId === String(diagnosis.diseaseSearchId)
+            && item.selectedDiseaseId === diagnosis.selectedDiseaseId)
+          if (linked) result = await read(`/api/ai/searches/${encodeURIComponent(linked.searchId)}`)
+        }
+        if (!controller.signal.aborted) setSavedRecommendation({ caseId: activeConsultationId, result })
+      } catch (error) {
+        if (!controller.signal.aborted) setSavedRecommendation({ caseId: activeConsultationId, error: error.message })
+      }
+    }
+    loadRecommendation()
+    return () => controller.abort()
+  }, [isNewPrescription, activeConsultationId, passedRecommendation])
+
+  const chooseRecommendedPrescription = (candidate) => {
+    setSelectedAiPrescription({ id: candidate.id, searchId: recommendation.searchId })
+    setSelectedPrescription(candidate.name)
+    setPrescriptionSource('ai')
+    setCatalogPrescriptionId(null)
+    setPrescriptionText('')
+    setHerbs(candidate.ingredients ?? [])
+  }
+
   const savePrescription = async () => {
     if (isSaving || savedPrescription) return
       const selectedConsultation = consultationRecords.find(
@@ -208,6 +262,10 @@ export default function Prescriptions({ currentRole }) {
       return
     }
 
+    if (prescriptionSource === 'ai' && !selectedAiPrescription?.searchId) {
+      alert('선택한 처방의 검색 기록을 확인할 수 없습니다. 후보 목록에서 다시 선택해 주세요.')
+      return
+    }
     setIsSaving(true)
 
     try {
@@ -222,9 +280,9 @@ export default function Prescriptions({ currentRole }) {
           body: JSON.stringify({
             caseId: Number(prescriptionConsultationId),
             diagnosisText: null,
-            prescriptionId: prescriptionSource === 'ai' ? aiPrescription.id :
+            prescriptionId: prescriptionSource === 'ai' ? selectedAiPrescription.id :
               prescriptionSource === 'catalog' ? catalogPrescriptionId : null,
-            prescriptionSearchId: prescriptionSource === 'ai' ? location.state.prescriptionSearchId : null,
+            prescriptionSearchId: prescriptionSource === 'ai' ? selectedAiPrescription.searchId : null,
             prescriptionName: selectedPrescription.trim(),
             prescriptionText: prescriptionText.trim() || null,
             ingredients: herbs.map((herb) => herb.compositionId != null ? herb : ({
@@ -408,51 +466,6 @@ const sendPrescription = async (record) => {
   }
 }
 
-const deletePrescription = async (record) => {
-  if (record.status !== '미전송') return
-
-  const confirmed = window.confirm(
-    `${record.patientName} 환자의 처방전을 삭제하시겠습니까?\n삭제한 처방전은 복구할 수 없습니다.`
-  )
-
-  if (!confirmed) return
-
-  try {
-    const response = await fetch(
-      `/api/prescriptions/${record.id}`,
-      {
-        method: 'DELETE',
-        credentials: 'include',
-      }
-    )
-
-    if (!response.ok) {
-      const data = await response.json()
-      alert(
-        typeof data.detail === 'string'
-          ? data.detail
-          : '처방전 삭제에 실패했습니다.'
-      )
-      return
-    }
-
-    setPrescriptionRecords((prev) =>
-      prev.filter((item) => item.id !== record.id)
-    )
-
-    setDetailPrescription((prev) =>
-      prev?.id === record.id ? null : prev
-    )
-
-    alert('처방전이 삭제되었습니다.')
-  } catch (error) {
-    console.error('처방전 삭제 오류:', error)
-    alert('서버 연결에 실패했습니다.')
-  }
-}
-
-
-
     if (!isNewPrescription) {
       return (
         <div>
@@ -540,18 +553,6 @@ const deletePrescription = async (record) => {
                             전송
                           </button>
                         )}
-                      {currentRole !== 'desk' && record.status === '미전송' && (
-                          <button
-                            type="button"
-                            onClick={() => deletePrescription(record)}
-                            style={{
-                              marginLeft: '8px',
-                              color: 'red',
-                            }}
-                          >
-                            삭제
-                          </button>
-                        )}
                       </div>
                   </td>
                 </tr>
@@ -630,7 +631,10 @@ const deletePrescription = async (record) => {
                       {isDesk && (
                         <button
                           type="button"
+                          disabled={printHistoryLoading || isPrinting}
                           onClick={async () => {
+                            if (printHistoryLoading || isPrinting) return
+                            setIsPrinting(true)
                             try {
                               const response = await fetch(
                                 `/api/prescriptions/${detailPrescription.rxId}/print?versionId=${detailPrescription.versionId}`,
@@ -643,13 +647,16 @@ const deletePrescription = async (record) => {
                               if (!response.ok) {
                                 const error = await response.json()
                                 throw new Error(
-                                  error.detail || '인쇄 요청 기록에 실패했습니다.'
+                                  error.error?.message || '인쇄 요청 기록에 실패했습니다.'
                                 )
                               }
 
+                              setPrintCount((count) => count + 1)
                               window.print()
                             } catch (error) {
                               alert(error.message)
+                            } finally {
+                              setIsPrinting(false)
                             }
                           }}
                           style={{ marginRight: '10px' }}
@@ -664,7 +671,7 @@ const deletePrescription = async (record) => {
 
                       <button
                         type="button"
-                        disabled={printHistoryLoading}
+                        disabled={printHistoryLoading || isPrinting}
                         onClick={() => setDetailPrescription(null)}
                       >
                         닫기
@@ -939,6 +946,9 @@ const applyCatalogPrescription = () => {
 
                       if (nextConsultationId !== selectedConsultationId) {
                         setSelectedConsultationId(nextConsultationId)
+                        setSavedRecommendation(null)
+                        setShowAllRecommendations(false)
+                        setSelectedAiPrescription(null)
                         setSelectedPrescription(null)
                         setPrescriptionSource('manual')
                         setCatalogPrescriptionId(null)
@@ -995,8 +1005,35 @@ const applyCatalogPrescription = () => {
           maxWidth: '700px',
         }}
       >
-        <p>AI 처방 추천 기능은 아직 연결되지 않았습니다.</p>
-        <p>추후 추천 처방 3개와 더보기 기능을 추가할 예정입니다.</p>
+        {recommendedCandidates.length ? (
+          <>
+            <ol>
+              {(showAllRecommendations ? recommendedCandidates : recommendedCandidates.slice(0, 3)).map((candidate) => (
+                <li key={candidate.id}>
+                  {candidate.name}{' '}
+                  <button
+                    type="button"
+                    disabled={isSaving || savedPrescription ||
+                      (prescriptionSource === 'ai' && selectedAiPrescription?.id === candidate.id)}
+                    onClick={() => chooseRecommendedPrescription(candidate)}
+                  >
+                    {prescriptionSource === 'ai' && selectedAiPrescription?.id === candidate.id ? '선택됨' : '선택'}
+                  </button>
+                </li>
+              ))}
+            </ol>
+            {recommendedCandidates.length > 3 && (
+              <button type="button" onClick={() => setShowAllRecommendations((shown) => !shown)}>
+                {showAllRecommendations ? '접기' : '더보기'}
+              </button>
+            )}
+          </>
+        ) : activeConsultationId ? (
+          currentRecommendation?.error ? <p role="alert">{currentRecommendation.error}</p>
+            : <p>{recommendation?.message || (passedRecommendation || currentRecommendation
+                ? '이 상담일지에 표시할 평가 처방 후보가 없습니다.'
+                : '처방 후보를 불러오는 중입니다.')}</p>
+        ) : <p>상담일지를 선택하면 저장된 처방 후보를 볼 수 있습니다.</p>}
       </div>
 
       <h3>선택된 처방 상세정보</h3>
@@ -1294,8 +1331,12 @@ const applyCatalogPrescription = () => {
               <input value={selectedPrescription} onChange={(event) => setSelectedPrescription(event.target.value)} />
             </label>
             <label>
-              처방 내용
-              <textarea value={prescriptionText} onChange={(event) => setPrescriptionText(event.target.value)} />
+              처방 내용 (선택)
+              <textarea
+                placeholder="저장할 처방 내용을 직접 입력"
+                value={prescriptionText}
+                onChange={(event) => setPrescriptionText(event.target.value)}
+              />
             </label>
 
             {herbs.map((herb, index) => (
@@ -1319,13 +1360,22 @@ const applyCatalogPrescription = () => {
                   style={{ flex: 2, padding: '10px', minWidth: 0 }}
                 />
 
-                <input
-                  type="text"
-                  aria-label="원본 용량"
-                  value={[herb.amount, herb.unit].filter(Boolean).join(' ')}
-                  readOnly
-                  style={{ flex: 1, padding: '10px', minWidth: 0 }}
-                />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <input
+                    type="text"
+                    aria-label="원본 용량"
+                    placeholder={herb.compositionId != null ? '원본 용량 미등록' : '원본 용량 정보 없음'}
+                    value={[herb.amount, herb.unit].filter(Boolean).join(' ')}
+                    readOnly
+                    style={{ width: '100%', boxSizing: 'border-box', padding: '10px' }}
+                  />
+                  {herb.originalDoseInfo && (
+                    <details>
+                      <summary>원본 용량 메모</summary>
+                      <p style={{ whiteSpace: 'pre-wrap' }}>{herb.originalDoseInfo}</p>
+                    </details>
+                  )}
+                </div>
 
                 <button
                   type="button"

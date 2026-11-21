@@ -1,10 +1,11 @@
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().with_name(".env"))
 
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -22,9 +23,6 @@ DATABASE_URL = DATABASE_URL.replace(
     1
 )
 
-
-if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL이 설정되지 않았습니다.")
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 

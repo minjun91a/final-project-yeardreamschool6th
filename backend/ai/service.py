@@ -73,6 +73,12 @@ def pending(jobs):
 
 def public_candidate(row, search_id):
     candidate = {key: value for key, value in row.items() if not key.startswith("_")}
+    trace = row.get("_trace", {})
+    if "keywordRank" in trace and "semantic" in trace:
+        candidate["rankingBasis"] = {
+            "keywordRank": trace["keywordRank"],
+            "semanticRank": (trace["semantic"] or {}).get("rank"),
+        }
     candidate["evidence"] = [
         {**source, "sourceUrl": f"{source['sourceUrl']}?searchId={search_id}"}
         for source in row["evidence"]
