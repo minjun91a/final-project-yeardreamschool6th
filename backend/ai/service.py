@@ -13,6 +13,7 @@ from sqlalchemy import text
 
 from database import engine
 from catalog import corporate_data
+from prescription_ingredients import validate_ingredient_copy
 from .explanations import explain, state
 from .evidence_checks import check_record, verify_candidate
 
@@ -118,18 +119,8 @@ def validate_prescription_source(connection, request, author_id):
     ingredients = []
     seen = set()
     for ingredient in request.ingredients:
-        item = ingredient.model_dump()
-        item["name"] = item["name"].strip()
-        if not item["name"]:
-            raise HTTPException(400, "약재명을 입력해야 합니다.")
-        composition_id = item["compositionId"]
-        if composition_id is not None:
-            if composition_id in seen or originals.get(composition_id) != item:
-                raise HTTPException(400, "복사한 약재 구성은 저장된 원본과 일치해야 합니다.")
-            seen.add(composition_id)
-        elif any(item[key] is not None for key in ("amount", "unit", "preparation", "originalDoseInfo")):
-            raise HTTPException(400, "직접 입력 약재에는 확인되지 않은 원본 정보를 넣을 수 없습니다.")
-        elif item["id"] is not None:
+        item = validate_ingredient_copy(ingredient, originals, seen)
+        if item["compositionId"] is None and item["id"] is not None:
             if catalog_tables is None:
                 catalog_tables, _, _ = corporate_data()
             herb = catalog_tables["herb"].get(item["id"])
@@ -620,3 +611,4 @@ def create_ai_router(require_clinical_user, get_editable_consultation, validate_
         return {"records": records, "total": len(records)}
 
     return router
+

@@ -319,6 +319,26 @@ class ApiV13Postgres(unittest.TestCase):
         self.call("GET", f"{path}/versions/{old_id}", 403, user="desk")
         self.call("GET", f"{path}/versions/999", 404)
 
+    def test_actual_dose_survives_save_correction_and_delivered_snapshot(self):
+        herb = {"compositionId": None, "id": None, "name": "manual fixture", "amount": None,
+                "unit": None, "preparation": None, "originalDoseInfo": None,
+                "prescribedAmount": "1.25", "prescribedUnit": "mL"}
+        initial = self.call("POST", "/api/prescriptions", 201,
+                            body=self.prescription(ingredients=[herb]))["record"]
+        path = f"/api/prescriptions/{initial['rxId']}"
+        old_id = initial["versionId"]
+        stored = self.call("GET", f"{path}/versions/{old_id}", 200)["record"]
+        self.assertEqual(stored["ingredients"], [herb])
+        delivery = self.call("PATCH", f"{path}/send", 200, body={"versionId": old_id})["record"]
+        changed = {**herb, "prescribedAmount": "2.5"}
+        updated = self.call("PATCH", path, 200, body=self.prescription(
+            versionId=old_id, reason="actual dose correction", ingredients=[changed]))["record"]
+        self.assertEqual(updated["ingredients"], [changed])
+        self.assertIn("ingredients", updated["change"]["changedFields"])
+        self.assertEqual(self.call("GET", f"{path}/versions/{old_id}", 200)["record"]["ingredients"], [herb])
+        delivered = self.call("GET", f"/api/prescription-deliveries/{delivery['id']}", 200, user="desk")["record"]
+        self.assertEqual(delivered["version"]["ingredients"], [herb])
+
     def test_transaction_rollback_when_later_writes_fail(self):
         self.sql("""ALTER TABLE "VISIT_STATUS_HISTORY" ADD CONSTRAINT reject_complete
                     CHECK ("AFTER_STATUS" != 'COMPLETED')""")
@@ -405,3 +425,4 @@ class ApiV13Postgres(unittest.TestCase):
         rows = self.sql("""SELECT "SCORE_STATUS", "RESULT_RANK", "RELEVANCE_SCORE"
                            FROM "PRESP_SEARCH_RESULT" ORDER BY "PRESP_UNIQN" """).all()
         self.assertEqual(rows, [("POLICY_NOT_CONFIGURED", None, None), ("INSUFFICIENT_DATA", None, None)])
+

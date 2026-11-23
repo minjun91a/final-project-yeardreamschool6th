@@ -134,8 +134,7 @@ export default function Consultation() {
   }
 
   useEffect(() => {
-    if (restoredInput.current?.caseId === activeCaseId && restoredInput.current.symptoms === symptoms) return
-    if (!activeCaseId || selectedDiseaseId === null || !diseaseSearchId || searchedSymptoms !== symptoms.trim()) return
+    if (!draftReady || !activeCaseId || selectedDiseaseId === null || !diseaseSearchId || searchedSymptoms !== symptoms.trim()) return
     let obsolete = false
     let prescriptionSearchId
     const request = {
@@ -168,7 +167,7 @@ export default function Consultation() {
       obsolete = true
       cancelSearch(prescriptionSearchId)
     }
-  }, [activeCaseId, diseaseSearchId, selectedDiseaseId, symptoms, searchedSymptoms])
+  }, [draftReady, activeCaseId, diseaseSearchId, selectedDiseaseId, symptoms, searchedSymptoms])
 
   const currentPrescriptionSearch =
     prescriptionSearch?.request.caseId === activeCaseId &&
@@ -674,7 +673,14 @@ export default function Consultation() {
                           <p>미평가 처방 {prescriptionResult.unscoredCandidates.length}건</p>
                           <ul>{prescriptionResult.unscoredCandidates.map((candidate) => (
                             <li key={candidate.id}>{candidate.name} · {candidate.evaluationStatus === 'INSUFFICIENT_DATA'
-                              ? '설명 자료 부족' : '평가 정책 미설정'}</li>
+                              ? '설명 자료 부족' : '평가 정책 미설정'}{' '}
+                              {savedConsultation && (
+                                <button type="button" onClick={() => navigate('/prescription/new', {
+                                  state: { patient, consultationId: savedConsultationId,
+                                    aiPrescription: candidate, prescriptionResult, selectedDiseaseId },
+                                })}>이 처방으로 작성</button>
+                              )}
+                            </li>
                           ))}</ul>
                         </>
                       )}
@@ -939,6 +945,7 @@ export default function Consultation() {
       </div>
     )
   }
+
 
 
 

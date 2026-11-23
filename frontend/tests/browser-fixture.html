@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ko"><meta charset="utf-8"><title>처방 회귀 검사</title><div id="root"></div>
+<script type="module">
+import React from 'react'
+import { createRoot } from 'react-dom/client'
+import { MemoryRouter, Routes, Route } from 'react-router-dom'
+import Prescriptions from '../src/pages/Prescriptions.jsx'
+import Consultation from '../src/pages/Consultation.jsx'
+
+const mode = new URLSearchParams(location.search).get('mode') || 'composer'
+const ingredient = { compositionId: 1, id: 2, name: '가상 약재', amount: null, unit: null,
+  preparation: null, originalDoseInfo: '다른 약재와 같은 분량' }
+const candidate = { id: 10, name: '미평가 가상 처방', evaluationStatus: 'INSUFFICIENT_DATA',
+  rank: null, score: null, ingredients: [ingredient], evidence: [] }
+const result = { caseId: 1, searchId: '101', kind: 'PRESCRIPTION', diseaseSearchId: '201',
+  selectedDiseaseId: 84, candidates: [], unscoredCandidates: [candidate], hasPendingExplanations: false,
+  summary: { connectedCount: 1, scoredCount: 0, insufficientCount: 1, policyUnconfiguredCount: 0 } }
+const record = { id: 1, patientId: 1, patientName: '가상 환자', visitId: 1,
+  symptoms: '가상 증상', consultationText: '검사 기록', status: 'IN_PROGRESS',
+  diagnosis: { diseaseSearchId: '201', selectedDiseaseId: 84 } }
+const version = { rxId: 9, versionId: 91, versionNo: 1, caseId: 1, prescriptionId: 10,
+  prescriptionSearchId: '101', prescriptionName: '가상 저장 처방', patientName: '가상 환자',
+  ingredients: [{ ...ingredient, amount: '9.0', unit: 'L', prescribedAmount: '1.25', prescribedUnit: 'mL' }] }
+window.apiCalls = []; window.submitted = []; window.alerts = []; window.printed = 0
+window.alert = (message) => window.alerts.push(message)
+window.print = () => { window.printed++ }
+window.fetch = async (input, options = {}) => {
+  const url = String(input); const method = options.method || 'GET'
+  window.apiCalls.push({ url, method })
+  let data
+  if (url === '/api/consultations') data = { records: [record] }
+  else if (url.startsWith('/api/visits')) data = { records: [{ ...record, status: 'IN_PROGRESS', patientId: 1 }] }
+  else if (url === '/api/patients') data = { patients: [{ id: 1, name: '가상 환자' }] }
+  else if (url === '/api/consultations/1') data = { record }
+  else if (url === '/api/consultations/1/searches') data = { records: [{ ...result, status: 'COMPLETED' }] }
+  else if (url === '/api/ai/searches/201') data = { searchId: '201', symptoms: '가상 증상',
+    candidates: [{ id: 84, name: '가상 병증' }], hasPendingExplanations: false }
+  else if (url === '/api/ai/searches/101' || url === '/api/ai/prescriptions') data = result
+  else if (url.includes('/cancel')) data = {}
+  else if (url.startsWith('/api/catalog/search')) data = { items: [{ id: 10, name: candidate.name }], total: 1 }
+  else if (url.startsWith('/api/catalog/prescription/10')) data = { record: {
+    type: 'prescription', id: 10, name: candidate.name, ingredients: [ingredient],
+    connectedToSelectedDisease: true, evidence: [], registeredCautionTexts: [], messages: [],
+    relations: { diseases: [], prescriptions: [], herbs: [], efficacies: [] } } }
+  else if ((url === '/api/prescriptions' && method === 'GET') || url === '/api/prescription-deliveries') data = {
+    records: [{ id: 9, currentVersionId: 91, prescriptionName: version.prescriptionName, patientName: '가상 환자' }] }
+  else if (url === '/api/prescriptions' || (url === '/api/prescriptions/9' && method === 'PATCH')) {
+    window.submitted.push(JSON.parse(options.body)); data = { record: { ...version,
+      versionId: method === 'PATCH' ? 92 : 91, ingredients: JSON.parse(options.body).ingredients } }
+  }
+  else if (url === '/api/prescriptions/9/versions/91') data = { record: version }
+  else if (url === '/api/prescription-deliveries/9') data = { record: { version } }
+  else if (url.includes('/print-history')) data = { printCount: 0 }
+  else if (url.includes('/print?')) data = {}
+  else throw new Error('Unexpected fixture API: ' + method + ' ' + url)
+  return new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/json' } })
+}
+const entry = mode === 'consultation' ? { pathname: '/consultation', state: { source: 'today', patient: { id: 1, caseId: 1, visitId: 1 } } }
+  : mode === 'list' || mode === 'desk' ? '/prescriptions' : '/prescription/new'
+createRoot(document.getElementById('root')).render(React.createElement(MemoryRouter, { initialEntries: [entry] },
+  React.createElement(Routes, null,
+    React.createElement(Route, { path: '/consultation', element: React.createElement(Consultation) }),
+    React.createElement(Route, { path: '*', element: React.createElement(Prescriptions, { currentRole: mode === 'desk' ? 'desk' : 'doctor' }) }))))
+</script></html>

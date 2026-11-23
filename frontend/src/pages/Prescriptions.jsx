@@ -1,6 +1,9 @@
 
 import { useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
+import IngredientDoseFields from '../components/IngredientDoseFields'
+import { doseInputError, evaluationLabel, formatOriginalDose, formatPrescribedDose,
+  prescriptionCandidates, selectedDiseaseForCatalog, serializeIngredient } from '../prescriptionUtils'
 
 export default function Prescriptions({ currentRole }) {
   const isDesk = currentRole === 'desk'
@@ -34,7 +37,7 @@ export default function Prescriptions({ currentRole }) {
     ? navigationResult : null
   const currentRecommendation = savedRecommendation?.caseId === activeConsultationId ? savedRecommendation : null
   const recommendation = passedRecommendation || currentRecommendation?.result
-  const recommendedCandidates = recommendation?.candidates ?? []
+  const recommendedCandidates = prescriptionCandidates(recommendation)
   const [consultationLoadError, setConsultationLoadError] = useState('')
   const [customPrescription, setCustomPrescription] = useState('')
   const [showDirectInput, setShowDirectInput] = useState(false)
@@ -262,6 +265,9 @@ export default function Prescriptions({ currentRole }) {
       return
     }
 
+    const doseError = doseInputError(herbs)
+    if (doseError) { alert(doseError); return }
+
     if (prescriptionSource === 'ai' && !selectedAiPrescription?.searchId) {
       alert('선택한 처방의 검색 기록을 확인할 수 없습니다. 후보 목록에서 다시 선택해 주세요.')
       return
@@ -285,15 +291,7 @@ export default function Prescriptions({ currentRole }) {
             prescriptionSearchId: prescriptionSource === 'ai' ? selectedAiPrescription.searchId : null,
             prescriptionName: selectedPrescription.trim(),
             prescriptionText: prescriptionText.trim() || null,
-            ingredients: herbs.map((herb) => herb.compositionId != null ? herb : ({
-              compositionId: null,
-              id: herb.id ?? null,
-              name: herb.name.trim(),
-              amount: null,
-              unit: null,
-              preparation: null,
-              originalDoseInfo: null,
-            })),
+            ingredients: herbs.map(serializeIngredient),
           }),
         }
       )
@@ -360,6 +358,9 @@ const updatePrescription = async () => {
     return
   }
 
+  const doseError = doseInputError(editPrescription.herbs)
+  if (doseError) { alert(doseError); return }
+
   setIsUpdating(true)
 
   try {
@@ -380,10 +381,7 @@ const updatePrescription = async () => {
           prescriptionSearchId: editPrescription.prescriptionSearchId,
           prescriptionText: editPrescription.prescriptionText,
           prescriptionName: editPrescription.prescriptionName.trim(),
-          ingredients: editPrescription.herbs.map((herb) => herb.compositionId != null || herb.id != null ? herb : ({
-            name: herb.name.trim(),
-            id: null, compositionId: null, amount: null, unit: null, preparation: null, originalDoseInfo: null,
-          })),
+          ingredients: editPrescription.herbs.map(serializeIngredient),
         }),
       }
     )
@@ -610,7 +608,8 @@ const sendPrescription = async (record) => {
                     <thead>
                       <tr>
                         <th>약재명</th>
-                        <th>용량(g)</th>
+                        <th>원본 참고량</th>
+                        <th>실제 처방량</th>
                       </tr>
                     </thead>
 
@@ -618,7 +617,11 @@ const sendPrescription = async (record) => {
                       {detailPrescription.herbs.map((herb, index) => (
                         <tr key={index}>
                           <td style={{ padding: '8px' }}>{herb.name}</td>
-                          <td style={{ padding: '8px' }}>{herb.amount}</td>
+                          <td style={{ padding: '8px' }}>
+                            {formatOriginalDose(herb)}
+                            {herb.amount != null && herb.originalDoseInfo && <p>원문 메모: {herb.originalDoseInfo}</p>}
+                          </td>
+                          <td style={{ padding: '8px' }}>{formatPrescribedDose(herb)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -765,13 +768,10 @@ const sendPrescription = async (record) => {
                         style={{ flex: 2, minWidth: 0, padding: '10px' }}
                       />
 
-                      <input
-                        type="text"
-                        aria-label="원본 용량"
-                        value={[herb.amount, herb.unit].filter(Boolean).join(' ')}
-                        readOnly
-                        style={{ flex: 1, minWidth: 0, padding: '10px' }}
-                      />
+                      <IngredientDoseFields herb={herb} onChange={(field, value) =>
+                        setEditPrescription((previous) => ({ ...previous,
+                          herbs: previous.herbs.map((item, i) => i === index ? { ...item, [field]: value } : item),
+                        }))} />
 
                       <button
                         type="button"
@@ -859,8 +859,8 @@ const sendPrescription = async (record) => {
       setCatalogOriginal(null)
 
       try {
-        const diseaseId = location.state?.selectedDiseaseId
-        const query = catalogType === 'prescription' && diseaseId
+        const diseaseId = selectedDiseaseForCatalog(recommendation, location.state, activeConsultationId)
+        const query = catalogType === 'prescription' && diseaseId != null
           ? `?selectedDiseaseId=${encodeURIComponent(diseaseId)}` : ''
         const response = await fetch(
           `/api/catalog/${catalogType}/${itemId}${query}`,
@@ -1011,6 +1011,7 @@ const applyCatalogPrescription = () => {
               {(showAllRecommendations ? recommendedCandidates : recommendedCandidates.slice(0, 3)).map((candidate) => (
                 <li key={candidate.id}>
                   {candidate.name}{' '}
+                  <span>{evaluationLabel(candidate)}</span>{' '}
                   <button
                     type="button"
                     disabled={isSaving || savedPrescription ||
@@ -1031,7 +1032,7 @@ const applyCatalogPrescription = () => {
         ) : activeConsultationId ? (
           currentRecommendation?.error ? <p role="alert">{currentRecommendation.error}</p>
             : <p>{recommendation?.message || (passedRecommendation || currentRecommendation
-                ? '이 상담일지에 표시할 평가 처방 후보가 없습니다.'
+                ? '이 상담일지에 표시할 연결 처방 후보가 없습니다.'
                 : '처방 후보를 불러오는 중입니다.')}</p>
         ) : <p>상담일지를 선택하면 저장된 처방 후보를 볼 수 있습니다.</p>}
       </div>
@@ -1228,7 +1229,8 @@ const applyCatalogPrescription = () => {
                                 {herb.preparation || '-'}
                               </td>
                               <td style={{ padding: '8px', borderBottom: '1px solid #eee' }}>
-                                {herb.amount ?? '-'} {herb.unit || ''}
+                                {formatOriginalDose(herb)}
+                                {herb.amount != null && herb.originalDoseInfo && <p>원문 메모: {herb.originalDoseInfo}</p>}
                               </td>
                             </tr>
                           ))}
@@ -1360,22 +1362,7 @@ const applyCatalogPrescription = () => {
                   style={{ flex: 2, padding: '10px', minWidth: 0 }}
                 />
 
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <input
-                    type="text"
-                    aria-label="원본 용량"
-                    placeholder={herb.compositionId != null ? '원본 용량 미등록' : '원본 용량 정보 없음'}
-                    value={[herb.amount, herb.unit].filter(Boolean).join(' ')}
-                    readOnly
-                    style={{ width: '100%', boxSizing: 'border-box', padding: '10px' }}
-                  />
-                  {herb.originalDoseInfo && (
-                    <details>
-                      <summary>원본 용량 메모</summary>
-                      <p style={{ whiteSpace: 'pre-wrap' }}>{herb.originalDoseInfo}</p>
-                    </details>
-                  )}
-                </div>
+                <IngredientDoseFields herb={herb} onChange={(field, value) => updateHerb(index, field, value)} />
 
                 <button
                   type="button"
@@ -1416,3 +1403,4 @@ const applyCatalogPrescription = () => {
     </div>
   )
 }
+

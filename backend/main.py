@@ -21,6 +21,7 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ValidationError
+from prescription_ingredients import Ingredient
 
 from sqlalchemy import text
 from database import engine
@@ -2167,16 +2168,6 @@ class PrescriptionRecord(BaseModel):
     prescriptionName: str
     herbs: list[HerbItem]
 
-class Ingredient(BaseModel):
-    model_config = {"extra": "forbid", "strict": True}
-    compositionId: int | None
-    id: int | None
-    name: str
-    amount: str | None
-    unit: str | None
-    preparation: str | None
-    originalDoseInfo: str | None
-
 class PrescriptionWrite(BaseModel):
     model_config = {"extra": "forbid", "strict": True}
     caseId: int
@@ -3962,3 +3953,4 @@ def get_prescription_version_detail(
         status_code=404,
         detail="해당 처방전 버전을 찾을 수 없습니다."
     )
+
