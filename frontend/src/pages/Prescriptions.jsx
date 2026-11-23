@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import IngredientDoseFields from '../components/IngredientDoseFields'
+import WorkspaceIcon from '../components/WorkspaceIcon'
 import { doseInputError, evaluationLabel, formatOriginalDose, formatPrescribedDose,
   prescriptionCandidates, selectedDiseaseForCatalog, serializeIngredient } from '../prescriptionUtils'
 
@@ -71,6 +72,7 @@ export default function Prescriptions({ currentRole }) {
 
   const [isSaving, setIsSaving] = useState(false)
   const [prescriptionRecords, setPrescriptionRecords] = useState([])
+  const [historyKeyword, setHistoryKeyword] = useState('')
   const [detailPrescription, setDetailPrescription] = useState(null)
   const printRxId = detailPrescription?.rxId
   const printVersionId = detailPrescription?.versionId
@@ -165,7 +167,7 @@ export default function Prescriptions({ currentRole }) {
       setConsultationLoadError('')
 
       const [consultationResponse, patientResponse] = await Promise.all([
-        fetch('/api/consultations', {
+        fetch('/api/consultations?forPrescription=true', {
           credentials: 'include',
         }),
         fetch('/api/patients', {
@@ -304,7 +306,9 @@ export default function Prescriptions({ currentRole }) {
       }
 
       setSavedPrescription(true)
-      alert('처방전이 저장되었습니다.')
+      alert(data.visitCompleted
+        ? '처방전이 저장되어 진료가 완료되었습니다.'
+        : '처방전이 저장되었습니다.')
     } catch (error) {
       console.error('처방전 저장 오류:', error)
       alert('서버 연결에 실패했습니다.')
@@ -465,36 +469,47 @@ const sendPrescription = async (record) => {
 }
 
     if (!isNewPrescription) {
+      const keyword = historyKeyword.trim().toLowerCase()
+      const visibleRecords = prescriptionRecords.filter(record =>
+        [record.patientName, record.prescriptionName].some(value => value?.toLowerCase().includes(keyword))
+      )
+      const sentCount = prescriptionRecords.filter(record => record.status === '전송').length
       return (
-        <div>
-          <h2>처방 관리</h2>
+        <div className="workspace-page">
+          <div className="workspace-heading-row">
+            <h2 className="workspace-title"><WorkspaceIcon name="document" />처방 관리</h2>
 
           {currentRole !== 'desk' && (
             <button
               type="button"
+              className="workspace-primary prescription-create"
               onClick={() => navigate('/prescription/new')}
-              style={{
-                padding: '10px 16px',
-                marginBottom: '20px',
-                backgroundColor: '#245c46',
-                color: 'white',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: 'pointer',
-              }}
             >
               AI 신규 처방전 작성 및 저장
             </button>
           )}
+          </div>
+          <div className="workspace-stats" aria-label="처방전 현황">
+            <div><WorkspaceIcon name="document" /><span>{isDesk ? '수신 처방전' : '전체 처방전'}</span><strong>{prescriptionRecords.length}건</strong></div>
+            {!isDesk && <>
+              <div><WorkspaceIcon name="clock" tone="amber" /><span>미전송</span><strong>{prescriptionRecords.length - sentCount}건</strong></div>
+              <div><WorkspaceIcon name="check" tone="blue" /><span>전송</span><strong>{sentCount}건</strong></div>
+            </>}
+          </div>
 
-          <h3>처방전 이력</h3>
+          <section className="workspace-panel prescription-history">
+          <div className="workspace-heading-row">
+            <h3 className="workspace-section-title"><WorkspaceIcon name="document" />처방전 이력</h3>
+            <input aria-label="처방전 이력 검색" placeholder="환자명 또는 처방명"
+              value={historyKeyword} onChange={event => setHistoryKeyword(event.target.value)} />
+          </div>
 
           {listError && <p style={{ color: 'red' }}>{listError}</p>}
 
+          <div className="workspace-table-scroll">
           <table
               style={{
                 width: '100%',
-                maxWidth: '1000px',
                 marginTop: '20px',
                 borderCollapse: 'collapse',
                 tableLayout: 'fixed',
@@ -512,18 +527,19 @@ const sendPrescription = async (record) => {
             </thead>
 
             <tbody>
-              {prescriptionRecords.map((record) => (
+              {visibleRecords.map((record) => (
                 <tr key={record.id}>
-                  <td>{(record.sentAt ?? record.createdAt)?.slice(0, 10)}</td>
+                  <td>{(record.createdAt ?? record.savedAt)?.slice(0, 10) || '—'}</td>
                   <td>{record.patientName}</td>
                   <td>{record.prescriptionName}</td>
-                  <td>{record.status}</td>
+                  <td><span className={`workspace-status${record.status === '미전송' ? ' pending' : ''}`}>{record.status}</span></td>
                   <td>
                       <div
                           style={{
                             display: 'flex',
                             alignItems: 'center',
                             gap: '8px',
+                            justifyContent: 'center',
                             whiteSpace: 'nowrap',
                           }}
                         >
@@ -557,6 +573,9 @@ const sendPrescription = async (record) => {
               ))}
             </tbody>
           </table>
+          </div>
+          {keyword && visibleRecords.length === 0 && !listError && <p>일치하는 처방전이 없습니다.</p>}
+          </section>
 
           {prescriptionRecords.length === 0 && !listError && (
             <p>저장된 처방전이 없습니다.</p>
@@ -592,7 +611,7 @@ const sendPrescription = async (record) => {
                   <p>환자명: {detailPrescription.patientName}</p>
                   <p>처방명: {detailPrescription.prescriptionName}</p>
                   <p>
-                    작성 날짜: {detailPrescription.createdAt?.slice(0, 10)}
+                    작성 날짜: {(detailPrescription.savedAt ?? detailPrescription.createdAt)?.slice(0, 10) || '—'}
                   </p>
                   <p>상태: {detailPrescription.status}</p>
 
@@ -915,9 +934,11 @@ const applyCatalogPrescription = () => {
 }
 
   return (
-    <div>
-      <h2>AI 신규 처방전 작성 및 저장</h2>
+    <div className="workspace-page">
+      <h2 className="workspace-title"><WorkspaceIcon name="document" />AI 신규 처방전 작성 및 저장</h2>
 
+      <div className="workspace-editor">
+      <aside className="workspace-panel workspace-editor-info">
       <h3>환자 정보</h3>
       {(() => {
           const selectedConsultation = consultationRecords.find(
@@ -971,15 +992,17 @@ const applyCatalogPrescription = () => {
                       maxWidth: '500px',
                     }}
                   >
-                    <option value="">상담일지를 선택해주세요.</option>
+                    <option value="">상담일지를 선택해 주세요.</option>
 
                     {consultationRecords.map((record) => (
                       <option key={record.id} value={String(record.id)}>
-                        {record.patientName} - {record.createdAt?.slice(0, 10)}
-                        {' / '}{record.symptoms}
+                        {record.patientName} - {(record.updatedAt || record.createdAt)?.slice(0, 10)}
                       </option>
                     ))}
                   </select>
+                  {!consultationLoadError && consultationRecords.length === 0 && (
+                    <p>처방전 작성이 필요한 상담일지가 없습니다.</p>
+                  )}
                 </div>
               )}
 
@@ -995,7 +1018,9 @@ const applyCatalogPrescription = () => {
             </div>
           )
         })()}
+      </aside>
 
+      <section className="workspace-panel workspace-editor-main">
       <h3>AI 추천 처방 목록</h3>
       <div
         style={{
@@ -1383,7 +1408,7 @@ const applyCatalogPrescription = () => {
         <button
           type="button"
           onClick={savePrescription}
-          disabled={isSaving || savedPrescription}
+          disabled={isSaving || savedPrescription || !activeConsultationId}
         >
           {isSaving
             ? '저장 중...'
@@ -1399,6 +1424,8 @@ const applyCatalogPrescription = () => {
         >
           오늘의 업무로 돌아가기
         </button>
+      </div>
+      </section>
       </div>
     </div>
   )

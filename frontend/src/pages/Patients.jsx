@@ -1,6 +1,8 @@
 
 import { useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
+import WorkspaceIcon from '../components/WorkspaceIcon'
+import { formatOriginalDose, formatPrescribedDose } from '../prescriptionUtils'
 export default function Patients({ currentRole }) {
   const { key, state } = useLocation()
 
@@ -9,13 +11,15 @@ export default function Patients({ currentRole }) {
 
 function PatientManagement({ currentRole, navigationState }) {
   const [selectedMenu, setSelectedMenu] = useState(
-    navigationState?.view === 'history' ? 'history' : null
+    ['search', 'register', 'history'].includes(navigationState?.view) ? navigationState.view : null
   )
   const [searchKeyword, setSearchKeyword] = useState('')
+  const [patientPage, setPatientPage] = useState(1)
   const [patients, setPatients] = useState([])
   const [patientLoadError, setPatientLoadError] = useState('')
   const [editPatient, setEditPatient] = useState(null)
   const [detailPatient, setDetailPatient] = useState(null)
+  const [pendingWaitingPatientId, setPendingWaitingPatientId] = useState(null)
 
 useEffect(() => {
   let active = true
@@ -60,8 +64,52 @@ useEffect(() => {
       body: JSON.stringify({ patientId }),
     })
     const data = await response.json()
-    if (!response.ok) throw new Error(data.error?.message || '접수에 실패했습니다.')
+    if (!response.ok) {
+      const error = new Error(data.error?.message || '접수에 실패했습니다.')
+      error.status = response.status
+      throw error
+    }
     return data.record.id
+  }
+
+  const registerWaitingVisit = async (visitId) => {
+    const response = await fetch(`/api/visits/${visitId}/status`, {
+      method: 'PATCH', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'REGISTER_WAITING', reason: null, consultation: null }),
+    })
+    if (!response.ok) {
+      const data = await response.json()
+      throw new Error(data.error?.message || '대기 등록에 실패했습니다.')
+    }
+  }
+
+  const registerExistingPatientForWaiting = async (patientId) => {
+    setPendingWaitingPatientId(patientId)
+    try {
+      let visitId
+      try {
+        visitId = await createReception(patientId)
+      } catch (error) {
+        if (error.status !== 409) throw error
+        const response = await fetch('/api/visits?scope=all', { credentials: 'include' })
+        const data = await response.json()
+        if (!response.ok) {
+          throw new Error(data.error?.message || '접수 현황을 불러오지 못했습니다.')
+        }
+        const reception = data.records.find(
+          (record) => record.patientId === patientId && record.status === 'REGISTERED'
+        )
+        if (!reception) throw error
+        visitId = reception.id
+      }
+      await registerWaitingVisit(visitId)
+      alert('상담 대기 등록이 완료되었습니다.')
+    } catch (error) {
+      alert(error.message)
+    } finally {
+      setPendingWaitingPatientId(null)
+    }
   }
 
   const registerReception = async () => {
@@ -211,15 +259,7 @@ const validatePatient = async (registerWaiting = false) => {
       let visitId
       try {
         visitId = await createReception(data.patient.id)
-        const waitingResponse = await fetch(`/api/visits/${visitId}/status`, {
-          method: 'PATCH', credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'REGISTER_WAITING', reason: null, consultation: null }),
-        })
-        if (!waitingResponse.ok) {
-          const waitingData = await waitingResponse.json()
-          throw new Error(waitingData.error?.message || '대기 등록에 실패했습니다.')
-        }
+        await registerWaitingVisit(visitId)
       } catch (error) {
         alert(`${visitId ? '환자 정보와 접수는 저장됐습니다.' : '환자 정보는 저장됐습니다.'}\n${error.message}`)
         setSelectedMenu('search')
@@ -334,32 +374,49 @@ const validatePatient = async (registerWaiting = false) => {
   const filteredPrescriptions = prescriptionRecords.filter(
     (record) => (record.sentAt || record.createdAt)?.slice(0, 10) === historyDate
   )
+  const keyword = searchKeyword.trim()
+  const matchingPatients = patients.filter((patient) =>
+    patient.name.includes(keyword) || patient.phone?.includes(keyword)
+  )
+  const pageSize = 10
+  const pageCount = Math.max(1, Math.ceil(matchingPatients.length / pageSize))
+  const currentPage = Math.min(patientPage, pageCount)
+  const shownPatients = matchingPatients.slice((currentPage - 1) * pageSize, currentPage * pageSize)
 
   return (
-    <div>
-      <h2>환자 관리</h2>
+    <div className="workspace-page">
+      {!selectedMenu && <h2 className="workspace-title"><WorkspaceIcon name="person" />환자 관리</h2>}
 
       {!selectedMenu && (
-        <div>
+        <div className="patient-menu-grid">
           <button
             type="button"
+            className="patient-menu-card patient-menu-card-featured"
             onClick={() => setSelectedMenu('search')}
           >
-            환자 검색 및 정보 조회·수정
+            <WorkspaceIcon name="search" />
+            <strong>환자 검색 및 정보 조회·수정</strong>
+            <span>기존 환자의 기본 정보와 보호자 정보를 확인합니다.</span>
           </button>
 
           <button
             type="button"
+            className="patient-menu-card"
             onClick={() => setSelectedMenu('register')}
           >
-            신규 환자 등록
+            <WorkspaceIcon name="plus" />
+            <strong>신규 환자 등록</strong>
+            <span>처음 방문한 환자의 정보를 등록합니다.</span>
           </button>
 
           <button
             type="button"
+            className="patient-menu-card"
             onClick={() => setSelectedMenu('history')}
           >
-            {currentRole === 'desk' ? '과거 처방전 기록확인' : '과거상담 기록확인'}
+            <WorkspaceIcon name="calendar" tone="amber" />
+            <strong>{currentRole === 'desk' ? '과거 처방전 기록확인' : '과거상담 기록확인'}</strong>
+            <span>날짜를 선택해 저장된 기록을 조회합니다.</span>
           </button>
         </div>
       )}
@@ -368,37 +425,30 @@ const validatePatient = async (registerWaiting = false) => {
         <div>
           <button
             type="button"
+            className="workspace-back"
             onClick={() => setSelectedMenu(null)}
           >
             환자 관리로 돌아가기
           </button>
 
           {selectedMenu === 'search' && (
-            <div>
-              <h3>환자 검색 및 정보 조회·수정</h3>
+            <div className="workspace-panel">
+              <h2 className="workspace-title"><WorkspaceIcon name="search" />환자 검색 및 정보 조회·수정</h2>
               {patientLoadError && <p role="alert">{patientLoadError}</p>}
 
-              <div style={{ marginBottom: '20px' }}>
+              <div className="patient-search">
+                <label htmlFor="patient-search">환자 검색</label>
                 <input
+                  id="patient-search"
                   type="text"
                   value={searchKeyword}
-                  onChange={(e) => setSearchKeyword(e.target.value)}
-                  placeholder="환자 이름을 입력해 주세요."
-                  style={{
-                    width: '300px',
-                    padding: '10px',
-                    marginRight: '8px',
-                  }}
+                  onChange={(e) => { setSearchKeyword(e.target.value); setPatientPage(1) }}
+                  placeholder="환자 이름 또는 연락처"
                 />
               </div>
-
-              <table
-                style={{
-                  borderCollapse: 'collapse',
-                  width: '100%',
-                  maxWidth: '900px',
-                }}
-              >
+              <p>전체 환자 <strong>{matchingPatients.length}명</strong></p>
+              <div className="workspace-table-scroll">
+              <table>
                 <thead>
                   <tr>
                     <th>성명</th>
@@ -410,11 +460,7 @@ const validatePatient = async (registerWaiting = false) => {
                 </thead>
 
                 <tbody>
-                  {patients
-                    .filter((patient) =>
-                      patient.name.includes(searchKeyword.trim())
-                    )
-                    .map((patient) => (
+                  {shownPatients.map((patient) => (
                       <tr key={patient.id}>
                         <td>{patient.name}</td>
                         <td>{patient.birthDate}</td>
@@ -433,19 +479,38 @@ const validatePatient = async (registerWaiting = false) => {
                           >
                             수정
                           </button>
+                          {currentRole === 'desk' && (
+                            <button
+                              type="button"
+                              disabled={pendingWaitingPatientId !== null}
+                              onClick={() => registerExistingPatientForWaiting(patient.id)}
+                            >
+                              {pendingWaitingPatientId === patient.id ? '등록 중…' : '상담 대기'}
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))}
                 </tbody>
               </table>
+              </div>
+              {matchingPatients.length === 0 && !patientLoadError && <p>검색 결과가 없습니다.</p>}
+              {pageCount > 1 && (
+                <nav className="workspace-pagination" aria-label="환자 목록 페이지">
+                  <button type="button" disabled={currentPage === 1} onClick={() => setPatientPage(currentPage - 1)}>이전</button>
+                  <span aria-live="polite">{currentPage} / {pageCount}</span>
+                  <button type="button" disabled={currentPage === pageCount} onClick={() => setPatientPage(currentPage + 1)}>다음</button>
+                </nav>
+              )}
             </div>
           )}
 
           {selectedMenu === 'register' && (
-            <div>
-              <h3>신규 환자 등록</h3>
+            <div className="workspace-panel">
+              <h2 className="workspace-title"><WorkspaceIcon name="plus" />신규 환자 등록</h2>
 
-              <div style={{ display: 'grid', gap: '12px', maxWidth: '500px' }}>
+              <div className="workspace-form-grid">
+              <h4>기본 정보</h4>
               <label>
                 성명 (필수)
                 <input
@@ -539,7 +604,7 @@ const validatePatient = async (registerWaiting = false) => {
 
 
           {selectedMenu === 'history' && (
-            <div>
+            <div className="workspace-panel">
               <h3>
                 {currentRole === 'desk' ? '과거 처방전 기록확인' : '과거상담 기록확인'}
               </h3>
@@ -675,14 +740,16 @@ const validatePatient = async (registerWaiting = false) => {
                       <thead>
                         <tr>
                           <th>약재명</th>
-                          <th>용량(g)</th>
+                          <th>원본 참고량</th>
+                          <th>실제 처방량</th>
                         </tr>
                       </thead>
                       <tbody>
                         {(prescriptionDetail?.ingredients || []).map((herb, index) => (
                           <tr key={index}>
                             <td>{herb.name || herb.ingredientName || '-'}</td>
-                            <td>{herb.amount ?? herb.quantity ?? '-'}</td>
+                            <td>{formatOriginalDose(herb)}</td>
+                            <td>{formatPrescribedDose(herb)}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -797,7 +864,7 @@ const validatePatient = async (registerWaiting = false) => {
                                       <h5>약재 구성</h5>
                                       {(prescriptionDetail.ingredients || []).length === 0 ? <p>등록된 약재가 없습니다.</p> : (
                                         <ul>{prescriptionDetail.ingredients.map((herb, index) => (
-                                          <li key={index}>{herb.name || herb.ingredientName || '-'}: {herb.amount ?? herb.quantity ?? '-'} {herb.unit || ''}</li>
+                                          <li key={index}>{herb.name || herb.ingredientName || '-'}: 원본 참고량 {formatOriginalDose(herb)} / 실제 처방량 {formatPrescribedDose(herb)}</li>
                                         ))}</ul>
                                       )}
                                     </div>
@@ -855,18 +922,25 @@ const validatePatient = async (registerWaiting = false) => {
                 }}
               >
                 <h3>환자 상세정보</h3>
-                <p>성명: {detailPatient.name}</p>
-                <p>생년월일: {detailPatient.birthDate}</p>
-                <p>연락처: {detailPatient.phone}</p>
-                <p>주소: {detailPatient.address}</p>
+                <h4 className="workspace-detail-heading">기본 정보</h4>
+                <dl className="workspace-detail-grid">
+                  <dt>성명</dt><dd>{detailPatient.name}</dd>
+                  <dt>생년월일</dt><dd>{detailPatient.birthDate || '—'}</dd>
+                  <dt>연락처</dt><dd>{detailPatient.phone || '—'}</dd>
+                  <dt>주소</dt><dd>{detailPatient.address || '—'}</dd>
+                </dl>
 
-                <h4>보호자 정보 (선택)</h4>
-                <p>보호자 이름: {detailPatient.guardianName || '-'}</p>
-                <p>관계: {detailPatient.guardianRelation || '-'}</p>
-                <p>보호자 연락처: {detailPatient.guardianPhone || '-'}</p>
+                <h4 className="workspace-detail-heading">보호자 정보</h4>
+                {detailPatient.guardianName || detailPatient.guardianRelation || detailPatient.guardianPhone ? (
+                  <dl className="workspace-detail-grid">
+                    <dt>이름</dt><dd>{detailPatient.guardianName || '—'}</dd>
+                    <dt>관계</dt><dd>{detailPatient.guardianRelation || '—'}</dd>
+                    <dt>연락처</dt><dd>{detailPatient.guardianPhone || '—'}</dd>
+                  </dl>
+                ) : <p>등록된 보호자 정보가 없습니다.</p>}
 
-                <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
-                {currentRole === 'desk' && <button type="button" onClick={registerReception}>
+                <div className="workspace-dialog-actions">
+                {currentRole === 'desk' && <button type="button" className="workspace-primary" onClick={registerReception}>
                   접수
                 </button>}
                   <button type="button" onClick={() => setDetailPatient(null)}>
@@ -905,7 +979,7 @@ const validatePatient = async (registerWaiting = false) => {
               >
                 <h3>환자 정보 수정</h3>
 
-                <div style={{ display: 'grid', gap: '12px' }}>
+                <div className="workspace-form-grid">
                   {[
                     ['name', '성명 (필수)', 'text'],
                     ['birthDate', '생년월일 (필수)', 'date'],
@@ -927,12 +1001,12 @@ const validatePatient = async (registerWaiting = false) => {
                   ))}
                 </div>
 
-                <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
-                  <button type="button" onClick={saveEditedPatient}>
-                    저장
-                  </button>
+                <div className="workspace-dialog-actions">
                   <button type="button" onClick={() => setEditPatient(null)}>
                     취소
+                  </button>
+                  <button type="button" className="workspace-primary" onClick={saveEditedPatient}>
+                    저장
                   </button>
                 </div>
               </div>

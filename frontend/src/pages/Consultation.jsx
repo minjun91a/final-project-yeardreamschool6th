@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
+import WorkspaceIcon from '../components/WorkspaceIcon'
 
 
 export default function Consultation() {
@@ -22,6 +23,7 @@ export default function Consultation() {
   const restoredInput = useRef(null)
 
   const [patients, setPatients] = useState([])
+  const [waitingCount, setWaitingCount] = useState(null)
   const [selectedPatientId, setSelectedPatientId] = useState('')
   useEffect(() => {
     const fetchPatients = async () => {
@@ -36,11 +38,13 @@ export default function Consultation() {
 
         const data = await response.json()
 
-        const consultingPatients = (data.records || []).filter(
+        const visits = data.records || []
+        const consultingPatients = visits.filter(
             (visit) => visit.status === 'IN_PROGRESS'
         ).map(visit => ({ ...visit, id: visit.patientId, name: visit.patientName }))
 
         setPatients(consultingPatients)
+        setWaitingCount(visits.filter(visit => visit.status === 'WAITING').length)
       } catch (error) {
         console.error('환자 목록 조회 오류:', error)
       }
@@ -440,7 +444,6 @@ export default function Consultation() {
 
   const writeConsultation = async (mode = 'save') => {
     if (isWritingConsultation) return
-    const complete = mode === 'complete'
     const pause = mode === 'pause'
     if (!activeCaseId) {
       alert('환자 정보가 없습니다.')
@@ -449,11 +452,6 @@ export default function Consultation() {
 
     if (!pause && !symptoms.trim()) {
       alert('증상을 입력해 주세요.')
-      return
-    }
-
-    if (complete && !consultationText.trim()) {
-      alert('상담 내용을 입력해 주세요.')
       return
     }
 
@@ -477,9 +475,9 @@ export default function Consultation() {
     try {
       const response = await fetch(
           pause ? `/api/visits/${patient.visitId}/status`
-            : `/api/consultations/${activeCaseId}${complete ? '/complete' : ''}`,
+            : `/api/consultations/${activeCaseId}`,
           {
-            method: complete ? 'POST' : 'PATCH',
+            method: 'PATCH',
             credentials: 'include',
             headers: {
               'Content-Type': 'application/json',
@@ -497,7 +495,8 @@ export default function Consultation() {
         return
       }
 
-      if (complete || pause) {
+      if (pause || data.record.status === 'COMPLETED') {
+        if (!pause) alert('상담일지가 저장되어 진료가 완료되었습니다.')
         navigate('/today')
         return
       }
@@ -513,13 +512,14 @@ export default function Consultation() {
   }
 
   return (
-      <div>
-        <h2>상담일지 작성</h2>
+      <div className="workspace-page">
+        <h2 className="workspace-title"><WorkspaceIcon name="document" />{fromToday && patient ? '진료 상담 일지 작성' : '진료·상담'}</h2>
         {draftError && <p role="alert">상담기록 연결 오류: {draftError}</p>}
         {patient && !draftReady && !draftError && <p>진료 중 상담기록 연결 중...</p>}
 
         {fromToday && patient ? draftReady && (
-            <div>
+            <div className="workspace-editor">
+              <aside className="workspace-panel workspace-editor-info">
               <h3>환자 정보</h3>
 
               <p>성명: {patient.name}</p>
@@ -532,6 +532,8 @@ export default function Consultation() {
               <p>관계: {patient.guardianRelation || '-'}</p>
               <p>보호자 연락처: {patient.guardianPhone || '-'}</p>
 
+              </aside>
+              <section className="workspace-panel workspace-editor-main">
               <h3>증상 입력</h3>
 
               <textarea
@@ -783,9 +785,6 @@ export default function Consultation() {
                     disabled={isWritingConsultation || !patient.visitId}>
                   진료 중단
                 </button>
-                <button type="button" onClick={() => writeConsultation('complete')} disabled={isWritingConsultation}>
-                  진료 완료
-                </button>
               </div>
               {savedConsultation && (
                   <div style={{marginTop: '12px', marginBottom: '12px'}}>
@@ -895,16 +894,20 @@ export default function Consultation() {
                   </div>
               )}
 
+              </section>
             </div>
         ) : (
-            <div>
+            <div className="account-overview consultation-overview">
+            <div className="workspace-panel">
+              <WorkspaceIcon name="document" />
               <h3>진료 중인 환자 선택</h3>
 
               {patients.length === 0 ? (
                   <p>현재 진료 중인 환자가 없습니다.</p>
               ) : (
-                  <div>
+                  <div className="consultation-overview-actions">
                     <select
+                        aria-label="진료 중인 환자 선택"
                         value={selectedPatientId}
                         onChange={(e) => setSelectedPatientId(e.target.value)}
                     >
@@ -919,6 +922,7 @@ export default function Consultation() {
 
                     <button
                         type="button"
+                        className="workspace-primary"
                         disabled={!selectedPatientId}
                         onClick={() => {
                           const selectedPatient = patients.find(
@@ -940,6 +944,19 @@ export default function Consultation() {
                     </button>
                   </div>
               )}
+            </div>
+            <section className="workspace-panel">
+              <WorkspaceIcon name="person" tone="blue" />
+              <h3>현재 상담 대기 및 진행 목록</h3>
+              <p>대기 환자와 진행 중인 진료를 확인합니다.</p>
+              {waitingCount !== null && (
+                <dl className="consultation-queue-counts">
+                  <div><dt>상담 대기</dt><dd>{waitingCount}명</dd></div>
+                  <div><dt>진료 중</dt><dd>{patients.length}명</dd></div>
+                </dl>
+              )}
+              <button type="button" onClick={() => navigate('/today')}>접수·대기·진행 환자 보기</button>
+            </section>
             </div>
         )}
       </div>

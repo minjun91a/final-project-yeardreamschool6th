@@ -1,5 +1,7 @@
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import WorkspaceIcon from '../components/WorkspaceIcon'
+import './Staff.css'
 
 const roleLabels = {
   DOCTOR: '한의사',
@@ -20,10 +22,14 @@ export default function Staff() {
   const [filter, setFilter] = useState('ALL')
   const [email, setEmail] = useState('')
   const [inviteRole, setInviteRole] = useState('DOCTOR')
-  const [inviteToken, setInviteToken] = useState('')
+  const [inviteResult, setInviteResult] = useState(null)
+  const [inviteError, setInviteError] = useState('')
   const [loading, setLoading] = useState(true)
   const [working, setWorking] = useState(false)
   const [error, setError] = useState('')
+  const [roleChange, setRoleChange] = useState(null)
+  const inviteDialog = useRef(null)
+  const roleDialog = useRef(null)
 
   const request = async (url, options = {}) => {
     const response = await fetch(url, {
@@ -38,11 +44,8 @@ export default function Staff() {
     const data = await response.json().catch(() => ({}))
 
     if (!response.ok) {
-      throw new Error(
-        typeof data.detail === 'string'
-          ? data.detail
-          : '요청 처리에 실패했습니다.'
-      )
+      const message = data.error?.message ?? data.detail
+      throw new Error(typeof message === 'string' ? message : '요청 처리에 실패했습니다.')
     }
 
     return data
@@ -71,11 +74,13 @@ export default function Staff() {
     event.preventDefault()
 
     if (!email.trim()) {
-      alert('이메일을 입력해 주세요.')
+      setInviteError('이메일을 입력해 주세요.')
       return
     }
 
     setWorking(true)
+    setInviteError('')
+    setInviteResult(null)
 
     try {
       const data = await request('/api/staff/invitations', {
@@ -86,19 +91,18 @@ export default function Staff() {
         }),
       })
 
-      setInviteToken(data.token)
+      setInviteResult(data)
       setEmail('')
       await loadStaff()
-      alert('초대 링크가 생성되었습니다.')
     } catch (err) {
-      alert(err.message)
+      setInviteError(err.message)
     } finally {
       setWorking(false)
     }
   }
 
-  const changeStaff = async (id, action, body, message) => {
-    if (!window.confirm(`${message} 진행할까요?`)) return
+  const changeStaff = async (id, action, body, message, confirmed = false) => {
+    if (!confirmed && !window.confirm(`${message} 진행할까요?`)) return
 
     setWorking(true)
 
@@ -110,6 +114,7 @@ export default function Staff() {
 
       await loadStaff()
       alert(`${message} 완료되었습니다.`)
+      return true
     } catch (err) {
       alert(err.message)
     } finally {
@@ -136,15 +141,23 @@ export default function Staff() {
     }
   }
 
-  const changeRole = async (person) => {
-    const nextRole = person.role === 'DOCTOR' ? 'DESK' : 'DOCTOR'
+  const openRoleChange = (person) => {
+    setRoleChange({ person, nextRole: person.role })
+    roleDialog.current.showModal()
+  }
 
-    await changeStaff(
+  const changeRole = async (event) => {
+    event.preventDefault()
+    if (!roleChange || roleChange.nextRole === roleChange.person.role) return
+    const { person, nextRole } = roleChange
+    const changed = await changeStaff(
       person.id,
       'role',
       { role: nextRole },
-      `직무를 ${roleLabels[nextRole]}(으)로 변경`
+      `직무를 ${roleLabels[nextRole]}(으)로 변경`,
+      true
     )
+    if (changed) roleDialog.current.close()
   }
 
   const visibleStaff = staff.filter((person) => {
@@ -157,8 +170,8 @@ export default function Staff() {
       ? invitations
       : []
 
-  const invitationLink = inviteToken
-    ? `${window.location.origin}/staff/register?token=${encodeURIComponent(inviteToken)}`
+  const invitationLink = inviteResult?.token
+    ? inviteResult.registrationUrl || `${window.location.origin}/staff/register?token=${encodeURIComponent(inviteResult.token)}`
     : ''
 
   const copyInvitationLink = async () => {
@@ -184,69 +197,111 @@ export default function Staff() {
   }
 
   return (
-    <div style={{ padding: '24px' }}>
-      <h2>직원 관리</h2>
+    <div className="workspace-page">
+      <div className="workspace-heading-row">
+        <h2 className="workspace-title"><WorkspaceIcon name="person" />직원 관리</h2>
+        <button type="button" className="workspace-primary" onClick={() => inviteDialog.current.showModal()}>직원 초대</button>
+      </div>
+      <div className="workspace-stats" aria-label="직원 현황">
+        <div><WorkspaceIcon name="person" /><span>전체 직원</span><strong>{staff.length}명</strong></div>
+        <div><WorkspaceIcon name="chat" tone="blue" /><span>초대 대기</span><strong>{invitations.filter(invitation => invitation.status === 'PENDING').length}명</strong></div>
+        {[['PENDING', 'clock', 'amber'], ['ACTIVE', 'check', 'green'], ['SUSPENDED', 'minus', 'rose']].map(([status, icon, tone]) => (
+          <div key={status}><WorkspaceIcon name={icon} tone={tone} /><span>{statusLabels[status]}</span><strong>{staff.filter(person => person.status === status).length}명</strong></div>
+        ))}
+      </div>
 
-      <section style={{
-        padding: '20px',
-        border: '1px solid #ddd',
-        borderRadius: '8px',
-        marginBottom: '24px',
-      }}>
-        <h3>직원 초대</h3>
+      <dialog ref={inviteDialog} className="workspace-dialog staff-invite-dialog" aria-labelledby="staff-invite-title">
+        <header className="staff-invite-header">
+          <WorkspaceIcon name="chat" />
+          <div>
+            <h3 id="staff-invite-title">직원 초대</h3>
+            <p>초대할 직원의 이메일과 직무를 입력하세요.</p>
+          </div>
+          <button type="button" className="staff-invite-close" aria-label="직원 초대 닫기"
+            onClick={() => inviteDialog.current.close()}>×</button>
+        </header>
 
-        <form onSubmit={inviteStaff}>
-          <div style={{
-            display: 'flex',
-            gap: '10px',
-            flexWrap: 'wrap',
-          }}>
+        <form className="staff-invite-form" onSubmit={inviteStaff}>
+          <label className="workspace-dialog-field">
+            <strong>이메일 <span className="staff-invite-required" aria-hidden="true">*</span></strong>
             <input
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="직원 이메일"
+              placeholder="초대할 직원의 이메일을 입력하세요."
               required
-              style={{ padding: '9px', minWidth: '240px' }}
             />
+          </label>
 
-            <select
-              value={inviteRole}
-              onChange={(e) => setInviteRole(e.target.value)}
-              style={{ padding: '9px' }}
-            >
-              <option value="DOCTOR">한의사</option>
-              <option value="DESK">안내데스크</option>
-            </select>
+          <fieldset className="staff-invite-roles">
+            <legend>직무 <span className="staff-invite-required" aria-hidden="true">*</span></legend>
+            <div className="staff-invite-role-grid">
+              {[
+                ['DOCTOR', 'document', '진료·상담 및 처방 업무'],
+                ['DESK', 'person', '환자 접수 및 처방전 확인'],
+              ].map(([role, icon, description]) => (
+                <label key={role} className="staff-invite-role">
+                  <WorkspaceIcon name={icon} />
+                  <span><strong>{roleLabels[role]}</strong><small>{description}</small></span>
+                  <input type="radio" name="invite-role" value={role} checked={inviteRole === role}
+                    onChange={() => setInviteRole(role)} />
+                </label>
+              ))}
+            </div>
+          </fieldset>
 
-            <button type="submit" disabled={working}>
-              직원 초대
-            </button>
+          <aside className="staff-invite-guide">
+            <strong>초대 안내</strong>
+            <ul>
+              <li>메일 발송이 설정되어 있으면 입력한 이메일로 가입 링크를 보냅니다.</li>
+              <li>초대 링크는 생성일로부터 7일간 유효합니다.</li>
+              <li>직원의 가입 신청 후 원장이 승인하면 계정이 활성화됩니다.</li>
+            </ul>
+          </aside>
+
+          {inviteError && <p className="staff-invite-error" role="alert">{inviteError}</p>}
+          {invitationLink && (
+            <div className="staff-invite-result" role="status">
+              <p>{inviteResult.emailDelivery === 'sent'
+                ? '직원 이메일로 초대 링크를 보냈습니다.'
+                : inviteResult.emailDelivery === 'failed'
+                  ? '메일을 보내지 못했습니다. 아래 링크를 복사해 전달해 주세요.'
+                  : '메일 발송 설정이 필요합니다. 아래 링크를 복사해 전달할 수 있습니다.'}</p>
+              <strong>초대 링크</strong>
+              <p>{invitationLink}</p>
+              <button type="button" onClick={copyInvitationLink}>링크 복사</button>
+            </div>
+          )}
+
+          <div className="workspace-dialog-actions">
+            <button type="button" onClick={() => inviteDialog.current.close()}>{invitationLink ? '닫기' : '취소'}</button>
+            <button type="submit" disabled={working}>{working ? '처리 중…' : '초대 링크 만들기'}</button>
           </div>
         </form>
-
-        {invitationLink && (
-          <div style={{
-            marginTop: '16px',
-            padding: '12px',
-            backgroundColor: '#f4f4f4',
-            borderRadius: '6px',
-          }}>
-            <strong>초대 링크</strong>
-            <p style={{ overflowWrap: 'anywhere' }}>
-              {invitationLink}
-            </p>
-            <button onClick={copyInvitationLink}>
-              링크 복사
-            </button>
-            <p style={{ fontSize: '13px', color: '#666' }}>
-              실제 이메일 발송은 아직 연결되지 않았습니다.
-            </p>
+      </dialog>
+      <dialog ref={roleDialog} className="workspace-dialog" aria-labelledby="staff-role-title"
+        onClose={() => setRoleChange(null)}>
+        <h3 id="staff-role-title">직무 변경</h3>
+        {roleChange && <form onSubmit={changeRole}>
+          <p>{roleChange.person.name || roleChange.person.email} · 현재 직무 {roleLabels[roleChange.person.role]}</p>
+          <fieldset>
+            <legend>변경할 직무</legend>
+            {Object.entries(roleLabels).map(([role, label]) => (
+              <label key={role} className="workspace-radio-option">
+                <input type="radio" name="staff-role" checked={roleChange.nextRole === role}
+                  onChange={() => setRoleChange({ ...roleChange, nextRole: role })} />
+                {label}
+              </label>
+            ))}
+          </fieldset>
+          <div className="workspace-dialog-actions">
+            <button type="button" onClick={() => roleDialog.current.close()}>취소</button>
+            <button type="submit" disabled={working || roleChange.nextRole === roleChange.person.role}>변경 저장</button>
           </div>
-        )}
-      </section>
+        </form>}
+      </dialog>
 
-      <section>
+      <section className="workspace-panel">
         <div style={{
           display: 'flex',
           justifyContent: 'space-between',
@@ -352,7 +407,7 @@ export default function Staff() {
                           <button
                             style={buttonStyle}
                             disabled={working}
-                            onClick={() => changeRole(person)}
+                            onClick={() => openRoleChange(person)}
                           >
                             직무 변경
                           </button>
@@ -413,7 +468,7 @@ export default function Staff() {
                         : '접수·수납'}
                     </td>
                     <td style={cellStyle}>
-                      {statusLabels[invitation.status] || '초대대기'}
+                      {invitation.status === 'PENDING' ? '초대대기' : statusLabels[invitation.status] || invitation.status}
                     </td>
                     <td style={cellStyle}>-</td>
                   </tr>

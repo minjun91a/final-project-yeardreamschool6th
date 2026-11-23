@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { BrowserRouter, Navigate, NavLink, Route, Routes } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { BrowserRouter, Link, Navigate, NavLink, Route, Routes, useLocation } from 'react-router-dom'
 import Today from './pages/Today'
 import Patients from './pages/Patients'
 import Consultation from './pages/Consultation'
@@ -16,10 +16,9 @@ const menus = [
   { name: '진료·상담', path: '/consultation' },
   { name: '처방 관리', path: '/prescriptions' },
   { name: '소통·계정', path: '/account' },
-  { name: '직원 관리', path: '/staff' },
 ]
 const roleMenus = {
-  director: ['/today', '/patients', '/consultation', '/prescriptions', '/account', '/staff'],
+  director: ['/today', '/patients', '/consultation', '/prescriptions', '/account'],
   doctor: ['/today', '/patients', '/consultation', '/prescriptions', '/account'],
   desk: ['/today', '/patients', '/prescriptions', '/account'],
 }
@@ -27,6 +26,88 @@ const getRole = (account) =>
   account?.isOwner ? 'director' :
   account?.role === 'DOCTOR' ? 'doctor' :
   account?.role === 'DESK' ? 'desk' : null
+
+function MainNavigation({ account, currentRole, logout, onOpenChat, serverStatus }) {
+  const [hovered, setHovered] = useState(null)
+  const [pinned, setPinned] = useState(null)
+  const nav = useRef(null)
+  const location = useLocation()
+  const isDesk = currentRole === 'desk'
+  const submenus = {
+    '/today': [{ name: '접수·대기·진행 환자', to: '/today' }],
+    '/patients': [
+      { name: '환자 검색 및 정보 조회·수정', to: '/patients', view: 'search' },
+      { name: '신규 환자 등록', to: '/patients', view: 'register' },
+      { name: isDesk ? '과거 처방전 기록확인' : '과거상담 기록확인', to: '/patients', view: 'history' },
+    ],
+    '/consultation': [{ name: '진료 상담 일지', to: '/consultation' }],
+    '/prescriptions': [
+      ...(!isDesk ? [{ name: 'AI 신규 처방전 작성 및 저장', to: '/prescription/new' }] : []),
+      { name: '처방전 이력', to: '/prescriptions' },
+    ],
+    '/account': [
+      { name: '내 프로필', to: '/account' },
+      { name: '업무 채팅방', action: onOpenChat },
+      ...(currentRole === 'director' ? [{ name: '직원 관리', to: '/staff' }] : []),
+    ],
+  }
+
+  useEffect(() => {
+    const closeOutside = (event) => {
+      if (!nav.current?.contains(event.target)) {
+        setPinned(null)
+        setHovered(null)
+      }
+    }
+    document.addEventListener('pointerdown', closeOutside)
+    return () => document.removeEventListener('pointerdown', closeOutside)
+  }, [])
+
+  const close = () => { setPinned(null); setHovered(null) }
+  return (
+    <header className="workspace-header">
+      <NavLink to="/today" className="workspace-brand" onClick={close}>
+        <span className="workspace-brand-mark" aria-hidden="true">한</span>
+        <span>한의결</span>
+      </NavLink>
+      <nav ref={nav} className="workspace-nav" aria-label="주 메뉴"
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            nav.current.querySelector('[aria-expanded="true"]')?.focus()
+            close()
+          }
+        }}>
+        {menus.filter(menu => roleMenus[currentRole].includes(menu.path)).map(({ name, path }) => {
+          const isOpen = (pinned ?? hovered) === path
+          const active = location.pathname === path ||
+            (path === '/prescriptions' && location.pathname === '/prescription/new') ||
+            (path === '/account' && location.pathname === '/staff')
+          const submenuId = `submenu-${path.slice(1)}`
+          return (
+            <div key={path} className={`workspace-nav-item${active ? ' active' : ''}`}
+              onMouseEnter={() => setHovered(path)} onMouseLeave={() => setHovered(null)}>
+              <NavLink to={path} onClick={close}>{name}</NavLink>
+              <button type="button" className="workspace-nav-toggle" aria-label={`${name} 하위 메뉴`}
+                aria-expanded={isOpen} aria-controls={submenuId}
+                onClick={() => { setPinned(pinned === path ? null : path); setHovered(null) }}>⌄</button>
+              <div className="workspace-submenu" id={submenuId} hidden={!isOpen}>
+                {submenus[path].map(item => item.action
+                  ? <button key={item.name} type="button" onClick={() => { close(); item.action() }}>{item.name}</button>
+                  : <Link key={item.name} to={item.to} state={item.view ? { view: item.view } : undefined}
+                      onClick={close}>{item.name}</Link>)}
+              </div>
+            </div>
+          )
+        })}
+      </nav>
+      <div className="workspace-session">
+        <span className="server-status">서버 {serverStatus}</span>
+        {account?.name && <span className="workspace-user">{account.name}</span>}
+        <button type="button" onClick={logout}>로그아웃</button>
+      </div>
+    </header>
+  )
+}
 
 function Login({ onLogin }) {
   const [email, setEmail] = useState('')
@@ -114,26 +195,18 @@ export default function App() {
       alert(err.message)
     }
   }
-  const visibleMenus = menus.filter(menu => (roleMenus[currentRole] || []).includes(menu.path))
   return (
   <BrowserRouter>
     {window.location.pathname === '/chat' ? (
       <ChatPopup />
     ) : (
       <div className="app-layout">
-        {currentRole && (
-          <aside className="sidebar">
-            <div className="sidebar-logo"><h1>한의결</h1><p>한의사 처방 검토 지원 서비스</p></div>
-            <nav className="sidebar-menu">
-              {visibleMenus.map(menu => <NavLink key={menu.path} to={menu.path} className={({isActive}) => isActive ? 'menu-item active' : 'menu-item'}>{menu.name}</NavLink>)}
-            </nav>
-          </aside>
-        )}
         <div className="main-layout">
-          <header className="topbar">
+          {currentRole ? <MainNavigation account={account} currentRole={currentRole} logout={logout}
+            onOpenChat={openChatWindow} serverStatus={serverStatus} /> : <header className="topbar">
             <span>한의결 관리 시스템</span>
-            <span className="server-status">FastAPI: {serverStatus} {currentRole && <button onClick={logout} style={{marginLeft:16}}>로그아웃</button>}</span>
-          </header>
+            <span className="server-status">FastAPI: {serverStatus}</span>
+          </header>}
 
           <main className="main-content">
             {authLoading ? (

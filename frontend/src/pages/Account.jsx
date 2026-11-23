@@ -1,12 +1,18 @@
 
 import { useEffect, useState } from 'react'
-import { useLocation } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
+import WorkspaceIcon from '../components/WorkspaceIcon'
 
 export default function Account({ currentRole, onOpenChat }) {
   const location = useLocation()
 
+  return <AccountWorkspace key={location.key} currentRole={currentRole} onOpenChat={onOpenChat}
+    initialView={location.state?.view} />
+}
+
+function AccountWorkspace({ currentRole, onOpenChat, initialView }) {
   const [selectedMenu, setSelectedMenu] = useState(
-    location.state?.view === 'chat' ? 'chat' : 'profile'
+    initialView === 'chat' ? 'chat' : 'profile'
   )
 
   const [profile, setProfile] = useState(null)
@@ -150,21 +156,18 @@ const changePassword = async () => {
 }
 
   return (
-    <div>
-      <h2>소통·계정</h2>
-
-      <div style={{ marginBottom: '20px' }}>
-        <button onClick={() => setSelectedMenu('profile')}>
-          내 프로필
-        </button>{' '}
-        <button onClick={onOpenChat}>
-          채팅방 보기
-        </button>
-      </div>
+    <div className="workspace-page">
+      <h2 className="workspace-title"><WorkspaceIcon name="chat" />소통·계정</h2>
 
       {selectedMenu === 'profile' && (
-        <div>
-          <h3>내 프로필</h3>
+        <div className="account-overview account-home">
+        <section className="workspace-panel">
+          <h3 className="workspace-section-title"><WorkspaceIcon name="chat" />업무 채팅방</h3>
+          <p>한의원 직원과 업무 메시지를 주고받습니다.</p>
+          <button type="button" className="workspace-primary" onClick={onOpenChat}>채팅방 열기</button>
+        </section>
+        <div className="workspace-panel">
+          <h3 className="workspace-section-title"><WorkspaceIcon name="person" tone="blue" />내 프로필</h3>
 
           {profileLoading && <p>프로필 정보를 불러오는 중입니다.</p>}
 
@@ -194,9 +197,17 @@ const changePassword = async () => {
             </div>
           )}
         </div>
+        {currentRole === 'director' && (
+          <section className="workspace-panel">
+            <h3 className="workspace-section-title"><WorkspaceIcon name="person" tone="blue" />직원 관리</h3>
+            <p>직원 목록과 초대·승인 상태를 확인합니다.</p>
+            <Link to="/staff">직원 목록 보기</Link>
+          </section>
+        )}
+        </div>
       )}
       {selectedMenu === 'editProfile' && (
-        <div>
+        <div className="workspace-panel">
           <button onClick={() => setSelectedMenu('profile')}>
             내 프로필로 돌아가기
           </button>
@@ -250,7 +261,7 @@ const changePassword = async () => {
       )}
 
       {selectedMenu === 'changePassword' && (
-  <div>
+  <div className="workspace-panel">
     <button onClick={() => setSelectedMenu('profile')}>
       내 프로필로 돌아가기
     </button>
@@ -302,8 +313,10 @@ const changePassword = async () => {
   </div>
 )}
             {selectedMenu === 'chat' && (
-        <div>
+        <div className="workspace-panel">
           <h3>채팅방 보기</h3>
+          <button type="button" onClick={onOpenChat}>채팅방 열기</button>
+          <button type="button" onClick={() => setSelectedMenu('profile')}>내 프로필</button>
         </div>
       )}
     </div>

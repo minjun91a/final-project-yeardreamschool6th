@@ -1,4 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
+
+const timeZone = 'Asia/Seoul'
+const dateKey = new Intl.DateTimeFormat('sv-SE', {
+  timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+})
+const dateLabel = new Intl.DateTimeFormat('ko-KR', {
+  timeZone, year: 'numeric', month: 'long', day: 'numeric', weekday: 'long',
+})
+const messageTime = new Intl.DateTimeFormat('ko-KR', {
+  timeZone, hour: 'numeric', minute: '2-digit',
+})
 
 export default function ChatWidget({ onClose }) {
   const [message, setMessage] = useState('')
@@ -212,12 +223,30 @@ export default function ChatWidget({ onClose }) {
           </p>
         )}
 
-        {messages.map((item) => {
+        {messages.map((item, index) => {
           const isMine = Number(item.senderId) === Number(myAccountId)
+          const sentAt = Date.parse(item.sentAt)
+          const previousSentAt = Date.parse(messages[index - 1]?.sentAt)
+          const day = Number.isFinite(sentAt) ? dateKey.format(sentAt) : null
+          const previousDay = Number.isFinite(previousSentAt) ? dateKey.format(previousSentAt) : null
 
           return (
+            <Fragment key={item.id}>
+              {day && day !== previousDay && (
+                <div style={{ textAlign: 'center', margin: '4px 0 16px' }}>
+                  <time dateTime={day} style={{
+                    display: 'inline-block',
+                    padding: '4px 12px',
+                    borderRadius: '999px',
+                    backgroundColor: '#e4ece8',
+                    color: '#3e5d51',
+                    fontSize: '12px',
+                  }}>
+                    {dateLabel.format(sentAt)}
+                  </time>
+                </div>
+              )}
               <div
-                key={item.id}
                 style={{
                   display: 'flex',
                   flexDirection: 'column',
@@ -271,15 +300,11 @@ export default function ChatWidget({ onClose }) {
                       flexShrink: 0,
                     }}
                   >
-                    {item.sentAt
-                      ? new Date(item.sentAt).toLocaleTimeString('ko-KR', {
-                          hour: 'numeric',
-                          minute: '2-digit',
-                        })
-                      : ''}
+                    {day ? messageTime.format(sentAt) : ''}
                   </span>
                 </div>
               </div>
+            </Fragment>
             )
             })}
       </div>

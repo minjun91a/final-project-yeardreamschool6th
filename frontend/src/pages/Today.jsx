@@ -1,6 +1,7 @@
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import WorkspaceIcon from '../components/WorkspaceIcon'
 import './Today.css'
 
 
@@ -12,21 +13,34 @@ const statusLabels = {
 export default function Today({ currentRole, onOpenChat }) {
   const navigate = useNavigate()
   const [patients, setPatients] = useState([])
-  const role = currentRole === 'desk' ? '안내데스크' : currentRole === 'director' ? '원장' : '한의사'
+  const [pendingCancellation, setPendingCancellation] = useState(null)
+  const [cancelReason, setCancelReason] = useState('')
+  const cancelDialog = useRef(null)
 
-  const loadVisits = async () => {
+  const loadVisits = async ({ signal, quiet = false } = {}) => {
     try {
-      const response = await fetch('/api/visits?scope=all', { credentials: 'include' })
+      const response = await fetch('/api/visits?scope=all', { credentials: 'include', signal })
       const data = await response.json()
       if (!response.ok) throw new Error(data.error?.message || '접수 현황을 불러오지 못했습니다.')
-      setPatients(data.records || [])
+      if (!signal?.aborted) setPatients(data.records || [])
     } catch (error) {
+      if (signal?.aborted || quiet) return
       console.error('접수 현황 조회 오류:', error)
       alert(error.message)
     }
   }
 
-  useEffect(() => { loadVisits() }, [])
+  useEffect(() => {
+    const controller = new AbortController()
+    loadVisits({ signal: controller.signal })
+    const timer = setInterval(() => {
+      loadVisits({ signal: controller.signal, quiet: true })
+    }, 5000)
+    return () => {
+      clearInterval(timer)
+      controller.abort()
+    }
+  }, [])
 
   const waiting = patients.filter(p => p.status === 'WAITING').length
   const consulting = patients.filter(p => p.status === 'IN_PROGRESS').length
@@ -53,9 +67,17 @@ export default function Today({ currentRole, onOpenChat }) {
     const reason = window.prompt('상담 시작 오처리 정정 사유를 입력하세요. 실제 상담 내용이 저장된 경우에는 정정할 수 없습니다.')
     if (reason?.trim()) changeVisitStatus(id, 'CORRECT_START', reason.trim())
   }
-  const cancelReception = id => {
-    const reason = window.prompt('접수 취소 사유를 입력하세요.')
-    if (reason?.trim()) changeVisitStatus(id, 'CANCEL', reason.trim())
+  const cancelReception = patient => {
+    setPendingCancellation(patient)
+    setCancelReason('')
+    cancelDialog.current.showModal()
+  }
+  const confirmCancellation = event => {
+    event.preventDefault()
+    const reason = cancelReason.trim()
+    if (!pendingCancellation || !reason) return
+    changeVisitStatus(pendingCancellation.id, 'CANCEL', reason)
+    cancelDialog.current.close()
   }
   const resumeConsultation = id => {
     const reason = window.prompt('진료 재개 사유를 입력해 주세요.')
@@ -64,9 +86,11 @@ export default function Today({ currentRole, onOpenChat }) {
 
 
   return (
-    <div className="today-page">
+    <div className="today-page workspace-page">
+      <div className="today-dashboard">
+      <div className="today-primary">
       <div className="today-heading">
-        <h2>오늘의 업무</h2>
+        <h2 className="workspace-title"><WorkspaceIcon name="calendar" />오늘의 업무</h2>
 
 
       </div>
@@ -91,7 +115,7 @@ export default function Today({ currentRole, onOpenChat }) {
       </div>
 
       <section className="today-section">
-        <h3>상담 대기·진행 환자 목록</h3>
+        <h3 className="workspace-section-title"><WorkspaceIcon name="person" />상담 대기·진행 환자 목록</h3>
 
         <table className="patient-table">
           <thead>
@@ -107,7 +131,7 @@ export default function Today({ currentRole, onOpenChat }) {
             {patients
               .filter((patient) => !['COMPLETED', 'CANCELLED'].includes(patient.status))
               .map((patient) => (
-              <tr key={patient.id}>
+              <tr key={patient.id} className={patient.status === 'IN_PROGRESS' ? 'visit-in-progress' : undefined}>
                 <td>{patient.registeredAt ? new Date(patient.registeredAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
                 <td>{patient.patientName}</td>
                 <td>
@@ -141,7 +165,7 @@ export default function Today({ currentRole, onOpenChat }) {
                     {['REGISTERED', 'WAITING'].includes(patient.status) && currentRole === 'desk' && (
                       <button
                         className="danger-button"
-                        onClick={() => cancelReception(patient.id)}
+                        onClick={() => cancelReception(patient)}
                       >
                         접수 취소
                       </button>
@@ -180,12 +204,17 @@ export default function Today({ currentRole, onOpenChat }) {
         </table>
       </section>
 
-<section className="today-section">
-  <h3>빠른 메뉴</h3>
+      <section className="today-section">
+        <h3 className="workspace-section-title"><WorkspaceIcon name="document" tone="amber" />이어서 처리할 업무</h3>
+        <button onClick={() => navigate('/prescriptions')}>
+          처방전 보기
+        </button>
+      </section>
+      </div>
 
-  <div className="today-quick-menu">
+  <aside className="today-quick-menu" aria-label="빠른 메뉴">
     <div className="quick-menu-card">
-      <h4>내 프로필</h4>
+      <h4 className="workspace-section-title"><WorkspaceIcon name="person" />내 프로필</h4>
       <p>내 계정 정보를 확인합니다.</p>
       <button onClick={() => navigate('/account')}>
         프로필 보기
@@ -193,7 +222,7 @@ export default function Today({ currentRole, onOpenChat }) {
     </div>
 
     <div className="quick-menu-card">
-      <h4>조회 날짜</h4>
+      <h4 className="workspace-section-title"><WorkspaceIcon name="calendar" tone="blue" />조회 날짜</h4>
       <p>과거 상담 기록을 조회합니다.</p>
       <input
         type="date"
@@ -211,22 +240,29 @@ export default function Today({ currentRole, onOpenChat }) {
     </div>
 
     <div className="quick-menu-card">
-      <h4>업무 채팅</h4>
+      <h4 className="workspace-section-title"><WorkspaceIcon name="chat" />업무 채팅</h4>
       <p>직원 간 채팅방을 확인합니다.</p>
       <button onClick={onOpenChat}>
         채팅방 보기
       </button>
     </div>
-  </div>
-</section>
-
-      <section className="today-section">
-        <h3>이어서 처리할 업무</h3>
-        <p>저장된 처방전 및 전송 대기 업무가 표시될 영역입니다.</p>
-        <button onClick={() => navigate('/prescriptions')}>
-          처방전 보기
-        </button>
-      </section>
+  </aside>
+      </div>
+      <dialog ref={cancelDialog} className="workspace-dialog" aria-labelledby="cancel-visit-title"
+        onClose={() => setPendingCancellation(null)}>
+        <h3 id="cancel-visit-title">접수를 취소하시겠습니까?</h3>
+        {pendingCancellation && <p>{pendingCancellation.patientName} 환자의 접수가 취소되며 대기 목록에서 제외됩니다.</p>}
+        <form onSubmit={confirmCancellation}>
+          <label className="workspace-dialog-field">
+            접수 취소 사유
+            <textarea required rows={3} value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} />
+          </label>
+          <div className="workspace-dialog-actions">
+            <button type="button" onClick={() => cancelDialog.current.close()}>돌아가기</button>
+            <button type="submit" className="workspace-danger" disabled={!cancelReason.trim()}>접수 취소</button>
+          </div>
+        </form>
+      </dialog>
     </div>
   )
 }
