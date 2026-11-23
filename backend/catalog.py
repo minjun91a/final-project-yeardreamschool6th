@@ -66,7 +66,10 @@ def workbook_rows(archive, path, shared, sheet_name, version):
 def read_workbook(path, version):
     names = ("EFF", "ATT_DIS", "MED_EFF_RSHIP", "MED_ATT_DIS_RSHIP", "ATT_DIS_PRESP_RSHIP")
     with path.open("rb") as file:
-        if hashlib.file_digest(file, "sha256").hexdigest() != version:
+        digest = hashlib.sha256()
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+        if digest.hexdigest() != version:
             raise ValueError("기업 원본과 조회 자료의 버전이 일치하지 않습니다.")
         file.seek(0)
         with ZipFile(file) as archive:
