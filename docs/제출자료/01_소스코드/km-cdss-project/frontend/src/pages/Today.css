@@ -1,0 +1,235 @@
+
+.today-page {
+  width: 100%;
+}
+
+.today-dashboard {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 290px);
+  align-items: stretch;
+  gap: 16px;
+}
+
+.today-primary { min-width: 0; }
+
+.today-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.today-page .today-heading h2 {
+  margin: 0;
+}
+
+.today-heading select {
+  padding: 8px;
+  border: 1px solid #d7e1da;
+  border-radius: 6px;
+  background: white;
+  color: #26352e;
+}
+
+.today-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0;
+  margin-bottom: 14px;
+  border: 1px solid var(--workspace-border);
+  border-radius: 9px;
+  background: white;
+}
+
+.summary-card {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 12px;
+}
+
+.summary-card + .summary-card { border-left: 1px solid var(--workspace-border); }
+.summary-card::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #168365; }
+.summary-card:nth-child(2)::before { background: #eaa333; }
+.summary-card:nth-child(4)::before { background: #64849d; }
+
+.summary-card span {
+  color: #66776c;
+  font-size: 14px;
+}
+
+.summary-card strong {
+  font-size: 15px;
+  color: #245b46;
+}
+
+.today-section {
+  margin-bottom: 14px;
+  padding: 18px;
+  background: white;
+  border: 1px solid #e1e7e3;
+  border-radius: 10px;
+}
+
+.today-section h3 {
+  margin: 0 0 12px;
+}
+
+.patient-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.patient-table th,
+.patient-table td {
+  padding: 15px 12px;
+  border-bottom: 1px solid #edf0ee;
+}
+
+.patient-table th {
+  background: #f6f8f7;
+  color: #52665a;
+  font-size: 14px;
+}
+
+.patient-table .visit-in-progress { background: var(--workspace-green-soft); }
+
+.patient-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.today-page .patient-actions button,
+.today-page .today-section > button {
+  padding: 9px 14px;
+  border: none;
+  border-radius: 6px;
+  background: #245b46;
+  color: white;
+  cursor: pointer;
+}
+
+.today-page .patient-actions .danger-button {
+  border: 1px solid #f0bdba;
+  background: #fff4f3;
+  color: #a52b28;
+}
+
+.today-page .patient-actions button:enabled:hover,
+.today-page .today-section > button:enabled:hover { background: var(--workspace-green-dark); }
+.today-page .patient-actions .danger-button:enabled:hover { background: #ffe5e2; }
+
+.status {
+  display: inline-block;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.status.waiting {
+  background: #fff3d9;
+  color: #936400;
+}
+
+.status.consulting {
+  background: #e2f3e9;
+  color: #236c46;
+}
+
+.status.completed {
+  background: #eeeeee;
+  color: #666666;
+}
+
+@media (max-width: 1000px) {
+  .today-summary {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .today-section {
+    overflow-x: auto;
+  }
+
+  .patient-table {
+    min-width: 650px;
+  }
+}
+
+.today-quick-menu {
+  display: grid;
+  gap: 12px;
+}
+
+.quick-menu-card {
+  padding: 18px;
+  border: 1px solid #e1e7e3;
+  border-radius: 10px;
+  background: white;
+}
+
+.quick-menu-card h4 {
+  margin: 0 0 10px;
+}
+
+.quick-menu-card p {
+  font-size: 13px;
+  color: #66776c;
+}
+
+.quick-menu-card button {
+  padding: 9px 14px;
+  border: none;
+  border-radius: 6px;
+  background: #245b46;
+  color: white;
+  cursor: pointer;
+}
+
+.quick-menu-card input {
+  max-width: 100%;
+  padding: 9px;
+  border: 1px solid #d7e1da;
+  border-radius: 6px;
+}
+
+@media (min-width: 801px) {
+  .today-page .summary-card {
+    padding-block: 16px;
+  }
+
+  .today-section {
+    padding: 22px;
+  }
+
+  .today-section:has(.patient-table) {
+    min-height: clamp(270px, 39vh, 380px);
+  }
+
+  .today-section:last-child {
+    min-height: 136px;
+    margin-bottom: 0;
+  }
+
+  .today-page .patient-table td {
+    padding-block: 16px;
+  }
+
+  .today-quick-menu {
+    grid-template-rows: repeat(3, minmax(0, 1fr));
+  }
+
+  .quick-menu-card {
+    align-content: center;
+    padding: 22px;
+  }
+}
+
+@media (max-width: 800px) {
+  .today-dashboard {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .today-quick-menu {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
+}

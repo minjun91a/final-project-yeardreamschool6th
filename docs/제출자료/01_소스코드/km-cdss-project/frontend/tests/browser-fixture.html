@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ko"><meta charset="utf-8"><title>처방 회귀 검사</title><div id="root"></div>
+<script type="module">
+import React from 'react'
+import { createRoot } from 'react-dom/client'
+import { MemoryRouter, Routes, Route } from 'react-router-dom'
+import Prescriptions from '../src/pages/Prescriptions.jsx'
+import Consultation from '../src/pages/Consultation.jsx'
+import App from '../src/App.jsx'
+import ChatWidget from '../src/components/ChatWidget.jsx'
+import '../src/index.css'
+
+const mode = new URLSearchParams(location.search).get('mode') || 'composer'
+const ingredient = { compositionId: 1, id: 2, name: '가상 약재', amount: null, unit: null,
+  preparation: null, originalDoseInfo: '다른 약재와 같은 분량' }
+const candidate = { id: 10, name: '미평가 가상 처방', evaluationStatus: 'INSUFFICIENT_DATA',
+  rank: null, score: null, ingredients: [ingredient], evidence: [] }
+const result = { caseId: 1, searchId: '101', kind: 'PRESCRIPTION', diseaseSearchId: '201',
+  selectedDiseaseId: 84, candidates: [], unscoredCandidates: [candidate], hasPendingExplanations: false,
+  summary: { connectedCount: 1, scoredCount: 0, insufficientCount: 1, policyUnconfiguredCount: 0 } }
+const record = { id: 1, patientId: 1, patientName: '가상 환자', visitId: 1,
+  symptoms: '가상 증상', consultationText: '검사 기록', status: 'IN_PROGRESS',
+  diagnosis: { diseaseSearchId: '201', selectedDiseaseId: 84 } }
+const version = { rxId: 9, versionId: 91, versionNo: 1, caseId: 1, prescriptionId: 10,
+  prescriptionSearchId: '101', prescriptionName: '가상 저장 처방', patientName: '가상 환자',
+  ingredients: [{ ...ingredient, amount: '9.0', unit: 'L', prescribedAmount: '1.25', prescribedUnit: 'mL' }] }
+window.apiCalls = []; window.submitted = []; window.alerts = []; window.printed = 0
+window.alert = (message) => window.alerts.push(message)
+window.print = () => { window.printed++ }
+window.fetch = async (input, options = {}) => {
+  const url = String(input); const method = options.method || 'GET'
+  window.apiCalls.push({ url, method })
+  let data
+  if (url === '/api/auth/me') data = { account: { name: '가상 직원',
+    role: mode === 'workspace-desk' ? 'DESK' : 'DOCTOR', isOwner: mode === 'workspace-director' } }
+  else if (url === '/api/staff') data = { staff: [], invitations: [] }
+  else if (url === '/api/staff/invitations' && method === 'POST') {
+    const invitation = JSON.parse(options.body)
+    if (window.submitted.some(previous => previous.email === invitation.email)) {
+      return Response.json({ error: { code: 'STATE_CONFLICT', message: '유효한 초대가 이미 존재합니다.' } }, { status: 409 })
+    }
+    window.submitted.push(invitation)
+    data = { token: 'fixture-invitation-token', emailDelivery: 'sent',
+      registrationUrl: 'https://hanui.example.test/staff/register?token=fixture-invitation-token' }
+  }
+  else if (url === '/api/health') data = { status: 'ok' }
+  else if (url === '/api/chat/messages') data = { messages: [
+    '2026-11-22T14:59:00Z', '2026-11-22T15:00:00Z', '2026-11-22T15:01:00Z',
+  ].map((sentAt, index) => ({ id: index + 1, sentAt, senderId: 1, senderName: '가상 직원',
+    senderRole: '한의사', message: `가상 메시지 ${index + 1}` })) }
+  else if (url === '/api/consultations?forPrescription=true') data = { records: [record] }
+  else if (url === '/api/consultations') data = { records: [record, { ...record, id: 99, status: 'COMPLETED' }] }
+  else if (url.startsWith('/api/visits')) data = { records: [
+    { ...record, status: 'IN_PROGRESS', patientId: 1 },
+    ...(mode.startsWith('workspace-') ? [{ ...record, id: 2, status: 'WAITING', patientName: '가상 대기 환자' }] : []),
+  ] }
+  else if (url === '/api/patients') data = { patients: mode.startsWith('workspace-')
+    ? Array.from({ length: 11 }, (_, index) => ({
+      id: index + 1, name: `가상 환자 ${index + 1}`,
+      birthDate: '1999-01-01', phone: `010-1234-000${index}`, address: '가상 주소',
+    }))
+    : [{ id: 1, name: '가상 환자' }] }
+  else if (url === '/api/consultations/1') data = { record }
+  else if (url === '/api/consultations/1/searches') data = { records: [{ ...result, status: 'COMPLETED' }] }
+  else if (url === '/api/ai/searches/201') data = { searchId: '201', symptoms: '가상 증상',
+    candidates: [{ id: 84, name: '가상 병증' }], hasPendingExplanations: false }
+  else if (url === '/api/ai/searches/101' || url === '/api/ai/prescriptions') data = result
+  else if (url.includes('/cancel')) data = {}
+  else if (url.startsWith('/api/catalog/search')) data = { items: [{ id: 10, name: candidate.name }], total: 1 }
+  else if (url.startsWith('/api/catalog/prescription/10')) data = { record: {
+    type: 'prescription', id: 10, name: candidate.name, ingredients: [ingredient],
+    connectedToSelectedDisease: true, evidence: [], registeredCautionTexts: [], messages: [],
+    relations: { diseases: [], prescriptions: [], herbs: [], efficacies: [] } } }
+  else if ((url === '/api/prescriptions' && method === 'GET') || url === '/api/prescription-deliveries') data = {
+    records: [{ id: 9, currentVersionId: 91, prescriptionName: version.prescriptionName,
+      patientName: '가상 환자', sentAt: '2026-11-23T10:00:00+09:00' }] }
+  else if (url === '/api/prescriptions' || (url === '/api/prescriptions/9' && method === 'PATCH')) {
+    window.submitted.push(JSON.parse(options.body)); data = { record: { ...version,
+      versionId: method === 'PATCH' ? 92 : 91, ingredients: JSON.parse(options.body).ingredients } }
+  }
+  else if (url === '/api/prescriptions/9/versions/91') data = { record: version }
+  else if (url === '/api/prescription-deliveries/9') data = { record: {
+    sentAt: '2026-11-23T10:00:00+09:00',
+    version: { ...version, savedAt: '2026-11-20T11:00:00+09:00' },
+  } }
+  else if (url.includes('/print-history')) data = { printCount: 0 }
+  else if (url.includes('/print?')) data = {}
+  else throw new Error('Unexpected fixture API: ' + method + ' ' + url)
+  return new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/json' } })
+}
+const entry = mode === 'consultation' ? { pathname: '/consultation', state: { source: 'today', patient: { id: 1, caseId: 1, visitId: 1 } } }
+  : mode === 'list' || mode === 'desk' ? '/prescriptions' : '/prescription/new'
+createRoot(document.getElementById('root')).render(mode === 'chat' ? React.createElement(ChatWidget)
+  : mode.startsWith('workspace-') ? React.createElement(App)
+  : React.createElement(MemoryRouter, { initialEntries: [entry] },
+  React.createElement(Routes, null,
+    React.createElement(Route, { path: '/consultation', element: React.createElement(Consultation) }),
+    React.createElement(Route, { path: '*', element: React.createElement(Prescriptions, { currentRole: mode === 'desk' ? 'desk' : 'doctor' }) }))))
+</script></html>
