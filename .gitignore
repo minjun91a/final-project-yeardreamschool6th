@@ -226,3 +226,18 @@ node_modules/
 
 # PyCharm
 .idea/
+
+# Private runtime data and credentials
+.env.*
+!.env.example
+*.pem
+*.key
+*.dump
+*.sqlite
+*.sqlite3
+*.gguf
+*.safetensors
+*.npy
+*.npz
+data/
+hf-cache/
